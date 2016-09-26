@@ -320,6 +320,7 @@ thread_yield (void)
   if (cur != idle_thread) 
     list_push_back (&ready_list, &cur->elem);
   cur->status = THREAD_READY;
+  cur->priority_tick = timer_ticks();
   schedule ();
   intr_set_level (old_level);
 }
@@ -488,11 +489,17 @@ alloc_frame (struct thread *t, size_t size)
   return t->stack;
 }
 
-static bool greater (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+static bool compare_thread (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
 {
   const struct thread *a_ = list_entry (a, struct thread, elem);
   const struct thread *b_ = list_entry (b, struct thread, elem);
-  return a_->priority > b_->priority;
+  
+  /* First, compare by priority. If priority is equal, using timer 
+     to choose oldest one. Assume that priority_tick is unique. */
+  if(a_->priority != b_->priority)
+    return a_->priority > b_->priority;
+  else
+    return a_->priority_tick < b_->priority_tick;
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
@@ -507,7 +514,7 @@ next_thread_to_run (void)
     return idle_thread;
   else
   {
-    list_sort (&ready_list, greater, NULL);
+    list_sort (&ready_list, compare_thread, NULL);
     return list_entry (list_pop_front (&ready_list), struct thread, elem);
   }
 }
