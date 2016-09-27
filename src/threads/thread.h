@@ -88,8 +88,14 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
+    int priority_origin;                /* Original value of priority */
     int64_t priority_tick;              /* Used when priority is equal. */
     struct list_elem allelem;           /* List element for all threads list. */
+
+    struct lock *lock;                  /* If status is THREAD_BLOCKED, this value
+                                           holds corresponding lock. */
+    struct list lock_list;              /* This list hold the locks that success acquire
+                                           in this thread. */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */

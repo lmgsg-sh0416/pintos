@@ -11,6 +11,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "devices/timer.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -97,6 +98,9 @@ thread_init (void)
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
+  initial_thread->priority_origin = PRI_DEFAULT;
+  initial_thread->lock = NULL;
+  list_init (&initial_thread->lock_list);
   initial_thread->tid = allocate_tid ();
 }
 
@@ -182,6 +186,9 @@ thread_create (const char *name, int priority,
 
   /* Initialize thread. */
   init_thread (t, name, priority);
+  t->priority_origin = priority;
+  t->lock = NULL;
+  list_init (&t->lock_list);
   tid = t->tid = allocate_tid ();
 
   /* Prepare thread for first run by initializing its stack.

@@ -196,6 +196,8 @@ lock_init (struct lock *lock)
 void
 lock_acquire (struct lock *lock)
 {
+  enum intr_level old_level;
+
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
@@ -203,11 +205,24 @@ lock_acquire (struct lock *lock)
   if (!lock_try_acquire (lock))
   {
     if (lock->holder->priority < thread_current ()->priority)
-      lock->holder->priority = thread_current ()->priority;
+    {
+      struct thread *t = lock->holder;
+      t->priority = thread_current ()->priority;
+      while (t->status == THREAD_BLOCKED)
+      {
+        t = t->lock->holder;
+        if (t->priority < thread_current ()->priority)
+          t->priority = thread_current ()->priority;
+        else
+          break;
+      }
+    }
+    thread_current ()->lock = lock;
     sema_down (&lock->semaphore);
+    thread_current ()->lock = NULL;
   }
   lock->holder = thread_current ();
-  lock->priority = thread_current ()->priority;
+  list_push_back (&thread_current ()->lock_list, &(lock->elem));
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -238,12 +253,34 @@ lock_try_acquire (struct lock *lock)
 void
 lock_release (struct lock *lock) 
 {
+  enum intr_level old_level;
+  struct list_elem *e;
+  int priority = -1;
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
   lock->holder = NULL;
   sema_up (&lock->semaphore);
-  thread_current ()->priority = lock->priority;
+  list_remove (&(lock->elem));
+  
+  if (list_empty (&thread_current ()->lock_list))
+    priority = thread_current ()->priority_origin;
+  else
+  {
+    for (e = list_begin (&thread_current ()->lock_list); e != list_end (&thread_current ()->lock_list); e = list_next (e))
+    {
+      struct lock *a = list_entry (e, struct lock, elem);
+      struct list_elem *l = list_min (&a->semaphore.waiters, compare_thread, NULL);
+      if (l != list_tail (&a->semaphore.waiters))
+      {
+        struct thread *t = list_entry (l, struct thread, elem);
+        if (priority < t->priority)
+          priority = t->priority;
+      }
+    }
+  }
+    
+  thread_current ()->priority = priority;
   thread_yield ();
 }
 
