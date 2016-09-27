@@ -204,11 +204,12 @@ lock_acquire (struct lock *lock)
 
   if (!lock_try_acquire (lock))
   {
+    old_level = intr_disable ();
     if (lock->holder->priority < thread_current ()->priority)
     {
       struct thread *t = lock->holder;
       t->priority = thread_current ()->priority;
-      while (t->status == THREAD_BLOCKED)
+      while (t != NULL && t->status == THREAD_BLOCKED)
       {
         t = t->lock->holder;
         if (t->priority < thread_current ()->priority)
@@ -216,8 +217,11 @@ lock_acquire (struct lock *lock)
         else
           break;
       }
+      if (t != NULL && t->priority < thread_current ()->priority)
+        t->priority = thread_current ()->priority;
     }
     thread_current ()->lock = lock;
+    intr_set_level (old_level);
     sema_down (&lock->semaphore);
     thread_current ()->lock = NULL;
     lock->holder = thread_current ();
@@ -263,8 +267,8 @@ lock_release (struct lock *lock)
   ASSERT (lock_held_by_current_thread (lock));
 
   lock->holder = NULL;
-  sema_up (&lock->semaphore);
   list_remove (&(lock->elem));
+  sema_up (&lock->semaphore);
   
   if (list_empty (&thread_current ()->lock_list))
     priority = thread_current ()->priority_origin;

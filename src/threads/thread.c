@@ -254,6 +254,7 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
+  t->priority_tick = timer_ticks ();
   list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
@@ -325,9 +326,11 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
+  {
+    cur->priority_tick = timer_ticks ();
     list_push_back (&ready_list, &cur->elem);
+  }
   cur->status = THREAD_READY;
-  cur->priority_tick = timer_ticks();
   schedule ();
   intr_set_level (old_level);
 }
@@ -357,9 +360,17 @@ thread_set_priority (int new_priority)
   struct thread *cur = thread_current ();
 
   old_level = intr_disable ();
-  cur->priority_origin = new_priority;
-  if (new_priority > cur->priority)
+  if (cur->priority_origin == cur->priority)
+  {
+    cur->priority_origin = new_priority;
     cur->priority = new_priority;
+  }
+  else
+  {
+    cur->priority_origin = new_priority;
+    if (new_priority > cur->priority)
+      cur->priority = new_priority;
+  }
   intr_set_level (old_level);
   thread_yield ();
 }
@@ -525,11 +536,15 @@ static struct thread *
 next_thread_to_run (void) 
 {
   if (list_empty (&ready_list))
+  {
     return idle_thread;
+  }
   else
   {
+    struct thread *next;
     list_sort (&ready_list, compare_thread, NULL);
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+    next = list_entry (list_pop_front (&ready_list), struct thread, elem);
+    return next;
   }
 }
 
