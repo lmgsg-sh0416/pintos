@@ -121,6 +121,14 @@ thread_start (void)
   sema_down (&idle_started);
 }
 
+static bool
+wakeup_less (struct list_elem *a, struct list_elem *b, void *aux UNUSED)
+{
+    struct thread *a_t = list_entry (a, struct thread, elem);
+    struct thread *b_t = list_entry (b, struct thread, elem);
+    return a_t->wakeup < b_t->wakeup;
+}
+
 void
 thread_sleep (int64_t time)
 {
@@ -128,7 +136,10 @@ thread_sleep (int64_t time)
   enum intr_level old_level;
 
   old_level = intr_disable ();
-  list_insert_ordered (&sleep_list, &t->elem);
+  t->wakeup = time;
+  list_insert_ordered (&sleep_list, &t->elem, wakeup_less, NULL);
+  thread_block ();
+  intr_set_level (old_level);
 }
 
 /* Called by the timer interrupt handler at each timer tick.
@@ -137,6 +148,11 @@ void
 thread_tick (void) 
 {
   struct thread *t = thread_current ();
+  int64_t current_t = timer_ticks ();
+  
+  while (!list_empty (&sleep_list) && 
+         list_entry (list_front (&sleep_list), struct thread, elem)->wakeup <= current_t) 
+    thread_unblock (list_entry (list_pop_front (&sleep_list), struct thread, elem));
 
   /* Update statistics. */
   if (t == idle_thread)
