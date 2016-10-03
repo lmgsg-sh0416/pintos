@@ -266,6 +266,8 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
+  old_level = intr_disable ();
+
   lock->holder = NULL;
   list_remove (&(lock->elem));
   sema_up (&lock->semaphore);
@@ -291,6 +293,8 @@ lock_release (struct lock *lock)
   
   thread_current ()->priority = priority;
   thread_yield ();
+
+  intr_set_level (old_level);
 }
 
 /* Returns true if the current thread holds LOCK, false
