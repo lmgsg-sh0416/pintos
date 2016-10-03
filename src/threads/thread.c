@@ -11,6 +11,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "devices/timer.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -101,6 +102,9 @@ thread_init (void)
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
+  initial_thread->priority_origin = PRI_DEFAULT;
+  initial_thread->lock = NULL;
+  list_init (&initial_thread->lock_list);
   initial_thread->tid = allocate_tid ();
 }
 
@@ -212,6 +216,9 @@ thread_create (const char *name, int priority,
 
   /* Initialize thread. */
   init_thread (t, name, priority);
+  t->priority_origin = priority;
+  t->lock = NULL;
+  list_init (&t->lock_list);
   tid = t->tid = allocate_tid ();
 
   /* Prepare thread for first run by initializing its stack.
@@ -277,6 +284,7 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
+  t->priority_tick = timer_ticks ();
   list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
@@ -348,7 +356,10 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
+  {
+    cur->priority_tick = timer_ticks ();
     list_push_back (&ready_list, &cur->elem);
+  }
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -375,8 +386,23 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+  enum intr_level old_level;
+  struct thread *cur = thread_current ();
+
+  old_level = intr_disable ();
+  if (cur->priority_origin == cur->priority)
+  {
+    cur->priority_origin = new_priority;
+    cur->priority = new_priority;
+  }
+  else
+  {
+    cur->priority_origin = new_priority;
+    if (new_priority > cur->priority)
+      cur->priority = new_priority;
+  }
   thread_yield ();
+  intr_set_level (old_level);
 }
 
 /* Returns the current thread's priority. */
@@ -518,11 +544,17 @@ alloc_frame (struct thread *t, size_t size)
   return t->stack;
 }
 
-static bool greater (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+bool compare_thread (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
 {
   const struct thread *a_ = list_entry (a, struct thread, elem);
   const struct thread *b_ = list_entry (b, struct thread, elem);
-  return a_->priority > b_->priority;
+  
+  /* First, compare by priority. If priority is equal, using timer 
+     to choose oldest one. Assume that priority_tick is unique. */
+  if(a_->priority != b_->priority)
+    return a_->priority > b_->priority;
+  else
+    return a_->priority_tick < b_->priority_tick;
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
@@ -534,11 +566,15 @@ static struct thread *
 next_thread_to_run (void) 
 {
   if (list_empty (&ready_list))
+  {
     return idle_thread;
+  }
   else
   {
-    list_sort (&ready_list, greater, NULL);
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+    struct thread *next;
+    list_sort (&ready_list, compare_thread, NULL);
+    next = list_entry (list_pop_front (&ready_list), struct thread, elem);
+    return next;
   }
 }
 
@@ -584,6 +620,8 @@ thread_schedule_tail (struct thread *prev)
   if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread) 
     {
       ASSERT (prev != cur);
+      ASSERT (list_empty(&prev->lock_list));
+      ASSERT (prev->lock == NULL);
       palloc_free_page (prev);
     }
 }
