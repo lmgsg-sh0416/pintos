@@ -96,7 +96,7 @@ struct thread
                                            holds corresponding lock. */
     struct list lock_list;              /* This list hold the locks that success acquire
                                            in this thread. */
-
+    int64_t wakeup;
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 
@@ -117,6 +117,7 @@ extern bool thread_mlfqs;
 void thread_init (void);
 void thread_start (void);
 
+void thread_sleep (int64_t);
 void thread_tick (void);
 void thread_print_stats (void);
 
