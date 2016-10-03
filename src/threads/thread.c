@@ -24,6 +24,9 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
+/* List of sleeping processes. */
+static struct list sleep_list;
+
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
@@ -92,6 +95,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  list_init (&sleep_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -117,12 +121,38 @@ thread_start (void)
   sema_down (&idle_started);
 }
 
+static bool
+wakeup_less (struct list_elem *a, struct list_elem *b, void *aux UNUSED)
+{
+    struct thread *a_t = list_entry (a, struct thread, elem);
+    struct thread *b_t = list_entry (b, struct thread, elem);
+    return a_t->wakeup < b_t->wakeup;
+}
+
+void
+thread_sleep (int64_t time)
+{
+  struct thread *t = thread_current();
+  enum intr_level old_level;
+
+  old_level = intr_disable ();
+  t->wakeup = time;
+  list_insert_ordered (&sleep_list, &t->elem, wakeup_less, NULL);
+  thread_block ();
+  intr_set_level (old_level);
+}
+
 /* Called by the timer interrupt handler at each timer tick.
    Thus, this function runs in an external interrupt context. */
 void
 thread_tick (void) 
 {
   struct thread *t = thread_current ();
+  int64_t current_t = timer_ticks ();
+  
+  while (!list_empty (&sleep_list) && 
+         list_entry (list_front (&sleep_list), struct thread, elem)->wakeup <= current_t) 
+    thread_unblock (list_entry (list_pop_front (&sleep_list), struct thread, elem));
 
   /* Update statistics. */
   if (t == idle_thread)
@@ -208,6 +238,8 @@ thread_create (const char *name, int priority,
 
   /* Add to run queue. */
   thread_unblock (t);
+
+  thread_yield ();
 
   return tid;
 }
@@ -344,6 +376,7 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
+  thread_yield ();
 }
 
 /* Returns the current thread's priority. */
@@ -485,6 +518,13 @@ alloc_frame (struct thread *t, size_t size)
   return t->stack;
 }
 
+static bool greater (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  const struct thread *a_ = list_entry (a, struct thread, elem);
+  const struct thread *b_ = list_entry (b, struct thread, elem);
+  return a_->priority > b_->priority;
+}
+
 /* Chooses and returns the next thread to be scheduled.  Should
    return a thread from the run queue, unless the run queue is
    empty.  (If the running thread can continue running, then it
@@ -496,7 +536,10 @@ next_thread_to_run (void)
   if (list_empty (&ready_list))
     return idle_thread;
   else
+  {
+    list_sort (&ready_list, greater, NULL);
     return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  }
 }
 
 /* Completes a thread switch by activating the new thread's page
