@@ -371,8 +371,8 @@ thread_set_priority (int new_priority)
     if (new_priority > cur->priority)
       cur->priority = new_priority;
   }
-  intr_set_level (old_level);
   thread_yield ();
+  intr_set_level (old_level);
 }
 
 /* Returns the current thread's priority. */
@@ -590,6 +590,8 @@ thread_schedule_tail (struct thread *prev)
   if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread) 
     {
       ASSERT (prev != cur);
+      ASSERT (list_empty(&prev->lock_list));
+      ASSERT (prev->lock == NULL);
       palloc_free_page (prev);
     }
 }
