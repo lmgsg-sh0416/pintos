@@ -97,6 +97,10 @@ struct thread
     struct list lock_list;              /* This list hold the locks that success acquire
                                            in this thread. */
     int64_t wakeup;
+    
+    int nice;
+    int recent_cpu;
+
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 
