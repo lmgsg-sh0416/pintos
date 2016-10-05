@@ -12,7 +12,6 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "devices/timer.h"
-#include "threads/fixed-point.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -647,10 +646,9 @@ next_thread_to_run (void)
   }
   else
   {
-    struct thread *next;
-    list_sort (&ready_list, compare_thread, NULL);
-    next = list_entry (list_pop_front (&ready_list), struct thread, elem);
-    return next;
+    if (!thread_mlfqs)
+      list_sort (&ready_list, compare_thread, NULL);
+    return list_entry (list_pop_front (&ready_list), struct thread, elem);
   }
 }
 
