@@ -12,6 +12,7 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "devices/timer.h"
+#include "threads/fixed-point.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -410,20 +411,27 @@ thread_set_priority (int new_priority)
   enum intr_level old_level;
   struct thread *cur = thread_current ();
 
-  old_level = intr_disable ();
-  if (cur->priority_origin == cur->priority)
+  if (thread_mlfqs)
   {
-    cur->priority_origin = new_priority;
     cur->priority = new_priority;
   }
   else
   {
-    cur->priority_origin = new_priority;
-    if (new_priority > cur->priority)
+    old_level = intr_disable ();
+    if (cur->priority_origin == cur->priority)
+    {
+      cur->priority_origin = new_priority;
       cur->priority = new_priority;
+    }
+    else
+    {
+      cur->priority_origin = new_priority;
+      if (new_priority > cur->priority)
+        cur->priority = new_priority;
+    }
+    thread_yield ();
+    intr_set_level (old_level);
   }
-  thread_yield ();
-  intr_set_level (old_level);
 }
 
 /* Returns the current thread's priority. */
