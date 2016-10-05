@@ -122,8 +122,7 @@ sema_up (struct semaphore *sema)
 
   sema->value++;
 
-  if (!thread_mlfqs)
-    thread_yield ();
+  thread_yield ();
 
   intr_set_level (old_level);
 }
@@ -253,13 +252,11 @@ lock_acquire (struct lock *lock)
 bool
 lock_try_acquire (struct lock *lock)
 {
-  enum intr_level old_level;
   bool success;
 
   ASSERT (lock != NULL);
   ASSERT (!lock_held_by_current_thread (lock));
 
-  old_level = intr_disable ();
   success = sema_try_down (&lock->semaphore);
   if (success)
   {
@@ -267,7 +264,6 @@ lock_try_acquire (struct lock *lock)
     if (!thread_mlfqs)
       list_push_back (&thread_current ()->lock_list, &(lock->elem));
   }
-  intr_set_level (old_level);
   return success;
 }
 

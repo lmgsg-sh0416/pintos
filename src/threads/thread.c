@@ -165,7 +165,7 @@ thread_tick (void)
   while (!list_empty (&sleep_list) && 
          list_entry (list_front (&sleep_list), struct thread, elem)->wakeup <= current_t) 
     thread_unblock (list_entry (list_pop_front (&sleep_list), struct thread, elem));
-
+  
   if (thread_mlfqs) {
     t->recent_cpu = ADD_I (t->recent_cpu, 1);
 
@@ -190,9 +190,14 @@ thread_tick (void)
   else
     kernel_ticks++;
 
-  /* Enforce preemption. */
-  if (++thread_ticks >= TIME_SLICE)
+  if (thread_mlfqs)
     intr_yield_on_return ();
+  else
+  {
+    /* Enforce preemption. */
+    if (++thread_ticks >= TIME_SLICE)
+      intr_yield_on_return ();
+  }
 }
 
 /* Prints thread statistics. */
@@ -654,8 +659,7 @@ next_thread_to_run (void)
   }
   else
   {
-    if (!thread_mlfqs)
-      list_sort (&ready_list, compare_thread, NULL);
+    list_sort (&ready_list, compare_thread, NULL);
     return list_entry (list_pop_front (&ready_list), struct thread, elem);
   }
 }
