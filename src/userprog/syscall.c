@@ -3,6 +3,7 @@
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/vaddr.h"
 
 static void syscall_handler (struct intr_frame *);
 
@@ -15,10 +16,8 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f) 
 {
-/* original code */
-//  printf ("system call!\n");
-//  thread_exit ();
-/* */
+  if (!is_user_vaddr (f->esp))
+    thread_exit();
 
   int num = *((int *)f->esp);
   
@@ -28,7 +27,14 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_EXIT:
       printf ("EXIT!\n");
-      thread_exit ();
+      if (!is_user_vaddr (f->esp))
+        thread_exit();
+
+      int status = *((int *)f->esp);
+
+      thread_current ()->status = status;
+
+      thread_exit();
       break;
     case SYS_EXEC:
       printf ("EXEC!\n");
@@ -52,7 +58,24 @@ syscall_handler (struct intr_frame *f)
       printf ("READ!\n");
       break;
     case SYS_WRITE:
-      printf ("WRITE!\n");
+      if (!is_user_vaddr (f->esp + 4) ||
+          !is_user_vaddr (f->esp + 8) ||
+          !is_user_vaddr (f->esp + 12))
+        thread_exit();
+
+      int size = *((int *)(f->esp + 4));
+      char *buffer = (char *)(f->esp + 8);
+      int fd = *((int *)(f->esp + 12));
+
+      if (fd == 1)
+        {
+          putbuf (buffer, size);
+        }
+      else
+        {
+          
+        }
+
       break;
     case SYS_SEEK:
       printf ("SEEK!\n");

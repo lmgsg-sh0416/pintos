@@ -98,6 +98,7 @@ struct thread
     uint32_t *pagedir;                  /* Page directory. */
     tid_t parent_pid;                   /* Parent tid */
     struct semaphore wait_sema;         /* Process wait */
+    int exit_status;
 #endif
 
     /* Owned by thread.c. */
