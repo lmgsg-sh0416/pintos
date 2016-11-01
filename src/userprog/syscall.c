@@ -28,6 +28,7 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_EXIT:
       printf ("EXIT!\n");
+      thread_exit ();
       break;
     case SYS_EXEC:
       printf ("EXEC!\n");
@@ -63,5 +64,6 @@ syscall_handler (struct intr_frame *f)
       printf ("CLOSE!\n");
       break;
     default:
+      break;
   }
 }

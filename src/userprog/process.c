@@ -131,6 +131,20 @@ start_process (void *file_name_)
   NOT_REACHED ();
 }
 
+struct mapping
+{
+  tid_t child_tid;
+  struct thread *t;
+};
+
+void
+sleep_thread (struct thread *t, void *aux)
+{
+  struct mapping *a = (struct mapping*) aux;
+  if (t->tid == a->child_tid)
+    a->t = t;
+}
+
 /* Waits for thread TID to die and returns its exit status.  If
    it was terminated by the kernel (i.e. killed due to an
    exception), returns -1.  If TID is invalid or if it was not a
@@ -141,10 +155,20 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
-  while (true);
-  return -1;
+  struct mapping a;
+  struct thread *cur = thread_current ();
+
+  a.child_tid = child_tid;
+  a.t = NULL;
+  thread_foreach (sleep_thread, &a);
+  // If it was terminated by the kernel,
+  if (a.t == NULL || a.t->parent_tid != cur->tid)
+    return -1;
+  sema_down (&(a.t->wait_sema));
+  return a.t->exit_status;
+  // Calling process_wait which has already been successfully isn't occured
 }
 
 /* Free the current process's resources. */
@@ -170,6 +194,8 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+  // Wake up parent if wait
+  sema_up (&(cur->wait_sema));
 }
 
 /* Sets up the CPU for running user code in the current

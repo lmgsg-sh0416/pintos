@@ -204,6 +204,11 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
+#ifdef USERPROG
+  sema_init (&(t->wait_sema), 0);
+  t->parent_tid = thread_current ()->tid;
+#endif
+
   intr_set_level (old_level);
 
   /* Add to run queue. */
@@ -292,6 +297,7 @@ thread_exit (void)
 
 #ifdef USERPROG
   process_exit ();
+  schedule ();
 #endif
 
   /* Remove thread from all threads list, set our status to dying,
