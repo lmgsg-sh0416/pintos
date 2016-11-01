@@ -27,12 +27,12 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_EXIT:
       printf ("EXIT!\n");
-      if (!is_user_vaddr (f->esp))
+      if (!is_user_vaddr (f->esp+4))
         thread_exit();
 
-      int status = *((int *)f->esp);
+      int status = *((int *)(f->esp+4));
 
-      thread_current ()->status = status;
+      thread_current ()->exit_status = status;
 
       thread_exit();
       break;

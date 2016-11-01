@@ -159,10 +159,13 @@ process_wait (tid_t child_tid)
 {
   struct mapping a;
   struct thread *cur = thread_current ();
+  enum intr_level old_level;
 
   a.child_tid = child_tid;
   a.t = NULL;
+  old_level = intr_disable ();
   thread_foreach (sleep_thread, &a);
+  intr_set_level (old_level);
   // If it was terminated by the kernel,
   if (a.t == NULL || a.t->parent_tid != cur->tid)
     return -1;
@@ -178,7 +181,7 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
-  printf ("%s: exit(%d)\n", cur->name, cur->status);
+  printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
