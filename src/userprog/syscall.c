@@ -30,6 +30,9 @@ syscall_handler (struct intr_frame *f)
         thread_exit();
 
       int status = *((int *)f->esp);
+
+      thread_current ()->status = status;
+
       thread_exit();
 
       break;
