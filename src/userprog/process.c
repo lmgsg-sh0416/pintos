@@ -76,8 +76,7 @@ start_process (void *file_name_)
   struct intr_frame if_;
   bool success;
   struct thread *cur = thread_current ();
-  char *phy_esp, *fn_ptr;
-  uint32_t *argv_ptr;
+  char *argu_ptr, *fn_ptr;
   uint32_t i, size, num = 0;
 
   /* Initialize interrupt frame and load executable. */
@@ -88,34 +87,33 @@ start_process (void *file_name_)
   success = load (file_name, &if_.eip, &if_.esp);
 
   /* Push argument into stack */
-  phy_esp = (char*) pagedir_get_page (cur->pagedir, if_.esp);
   /* Algorithm for find size of parsing string and memcpy */
   fn_ptr = file_name;
-  while (file_name-fn_ptr<PGSIZE && !(*fn_ptr=='\0' && *(fn_ptr+1)=='\0'))
+  while (fn_ptr-file_name<PGSIZE && !(*fn_ptr=='\0' && *(fn_ptr+1)=='\0'))
     fn_ptr++;
   size = fn_ptr-file_name;
-  memcpy (phy_esp-size, file_name, size);
+  argu_ptr = (char*)if_.esp;
+  argu_ptr -= size;
+  memcpy (argu_ptr-1, file_name, size);
   /* word align */
-  if_.esp -= (size%4 ? size + (4 - size%4) : size);
+  while (argu_ptr <= (char*)if_.esp) if_.esp -= 4;
   /* argv pointer array setting */
   if_.esp -= 4; // argv[4] = 0
-  argv_ptr = (uint32_t*) pagedir_get_page (cur->pagedir, if_.esp);
-  for (i=0;i<size;i++)
+  for (i=1;i<=size;i++)
     if (*(char*)(PHYS_BASE-i-1) == '\0')
       {
         if_.esp -= 4;
-        argv_ptr--; 
-        *argv_ptr = PHYS_BASE-i;
+        *((int*)if_.esp) = PHYS_BASE-i;
         num++;
       }
   if_.esp -= 4;
-  argv_ptr--; 
-  *argv_ptr = argv_ptr + 1;
+  *((int*)if_.esp) = if_.esp + 1;
   /* argc */
   if_.esp -= 4;
-  argv_ptr--; 
-  *argv_ptr = num;
-  
+  *((int*)if_.esp) = num;
+
+  /* return addres */
+  hex_dump (16, PHYS_BASE-52, 52, true);
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
@@ -524,7 +522,7 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
-        *esp = PHYS_BASE - 12;
+        *esp = PHYS_BASE;
       else
         palloc_free_page (kpage);
     }
