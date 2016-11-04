@@ -75,9 +75,15 @@ start_process (void *file_name_)
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
+<<<<<<< HEAD
   char *esp_char, *fn_ptr;
   uint32_t *esp_int;
   uint32_t size, num = 0;
+=======
+  struct thread *cur = thread_current ();
+  char *argu_ptr, *fn_ptr;
+  uint32_t i, size, num = 0;
+>>>>>>> 6f95a38c6e136d83421b8885e73bda650af7f1b6
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -86,9 +92,14 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
+<<<<<<< HEAD
+=======
+  /* Push argument into stack */
+>>>>>>> 6f95a38c6e136d83421b8885e73bda650af7f1b6
   /* Algorithm for find size of parsing string and memcpy */
   esp_char = (char*)if_.esp;
   fn_ptr = file_name;
+<<<<<<< HEAD
   while (fn_ptr+1-file_name<+PGSIZE && !(*fn_ptr=='\0' && *(fn_ptr+1)=='\0'))
     fn_ptr++;
   size = fn_ptr-file_name+1;
@@ -112,6 +123,33 @@ start_process (void *file_name_)
   printf("%x\n",esp_int);
   if_.esp = (void*)esp_int;
   hex_dump (16, PHYS_BASE-48, 48, true);
+=======
+  while (fn_ptr-file_name<PGSIZE && !(*fn_ptr=='\0' && *(fn_ptr+1)=='\0'))
+    fn_ptr++;
+  size = fn_ptr-file_name;
+  argu_ptr = (char*)if_.esp;
+  argu_ptr -= size;
+  memcpy (argu_ptr-1, file_name, size);
+  /* word align */
+  while (argu_ptr <= (char*)if_.esp) if_.esp -= 4;
+  /* argv pointer array setting */
+  if_.esp -= 4; // argv[4] = 0
+  for (i=1;i<=size;i++)
+    if (*(char*)(PHYS_BASE-i-1) == '\0')
+      {
+        if_.esp -= 4;
+        *((int*)if_.esp) = PHYS_BASE-i;
+        num++;
+      }
+  if_.esp -= 4;
+  *((int*)if_.esp) = if_.esp + 1;
+  /* argc */
+  if_.esp -= 4;
+  *((int*)if_.esp) = num;
+
+  /* return addres */
+  hex_dump (16, PHYS_BASE-52, 52, true);
+>>>>>>> 6f95a38c6e136d83421b8885e73bda650af7f1b6
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
