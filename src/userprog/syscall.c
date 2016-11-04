@@ -26,7 +26,6 @@ syscall_handler (struct intr_frame *f)
       printf ("HALT!\n");
       break;
     case SYS_EXIT:
-      printf ("EXIT!\n");
       if (!is_user_vaddr (f->esp+4))
         thread_exit();
 
@@ -62,20 +61,11 @@ syscall_handler (struct intr_frame *f)
           !is_user_vaddr (f->esp + 8) ||
           !is_user_vaddr (f->esp + 12))
         thread_exit();
-
-      int size = *((int *)(f->esp + 4));
-      char *buffer = (char *)(f->esp + 8);
-      int fd = *((int *)(f->esp + 12));
-
+      int fd = *((int *)(f->esp + 4));
+      char *buffer = *((char **)(f->esp + 8));
+      int size = *((int *)(f->esp + 12));
       if (fd == 1)
-        {
-          putbuf (buffer, size);
-        }
-      else
-        {
-          
-        }
-
+        putbuf (buffer, size);
       break;
     case SYS_SEEK:
       printf ("SEEK!\n");

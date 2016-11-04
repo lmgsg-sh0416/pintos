@@ -47,21 +47,15 @@ process_execute (const char *file_name)
        token = strtok_r (NULL, " ", &save_ptr))
     {
       len = strlen (token);
-      /* For debuging */
-      //printf("'%s' strlen: %d\n",token, len);
       strlcpy(parse_ptr, token, len+1);
       parse_ptr += (len+1);
     }
 
   palloc_free_page (fn_copy);
   fn_copy = parse_copy;
-  
-  /* For debuging */
-  hex_dump (16, fn_copy, 20, true);
-  //hex_dump (16, parse_copy, 20, true);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (fn_copy, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -98,20 +92,18 @@ start_process (void *file_name_)
   esp_int = (uint32_t*)if_.esp;
   while ((void*)esp_int > (void*)esp_char)
     esp_int--;
-  /* argv pointer array setting */
+  /* argv and argc */
   esp_int--;
   *(esp_int--) = 0;
-  for (fn_ptr=esp_char; fn_ptr<PHYS_BASE; fn_ptr++)
+  for (fn_ptr=PHYS_BASE-1; fn_ptr>=esp_char; fn_ptr--)
     if (*(fn_ptr-1) == '\0')
       {
         *(esp_int--) = (uint32_t*)fn_ptr;
         num++;
       }
   *(esp_int--) = (uint32_t*)esp_int+1;
-  *(esp_int) = num; 
-  printf("%x\n",esp_int);
+  *(esp_int--) = num; 
   if_.esp = (void*)esp_int;
-  hex_dump (16, PHYS_BASE-48, 48, true);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
