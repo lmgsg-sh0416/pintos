@@ -18,7 +18,7 @@ static bool
 validate_user_memory (void *vaddr)
 {
   struct thread *cur = thread_current ();
-  return (pagedir_get_page (cur->pagedir, vaddr) != NULL);
+  return (is_user_vaddr (vaddr) && pagedir_get_page (cur->pagedir, vaddr) != NULL);
 }
 
 static void
@@ -37,9 +37,13 @@ syscall_exec (const char *cmd_line)
 static void
 syscall_handler (struct intr_frame *f) 
 {
+  struct thread *cur = thread_current ();
   int syscall_num;
   if (!validate_user_memory (f->esp))
+  {
+    cur->exit_status = -1;
     thread_exit();
+  }
   syscall_num = *((int *)f->esp);
   
   switch (syscall_num) {
@@ -48,16 +52,27 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_EXIT:
       if (!validate_user_memory (f->esp+4))
+      {
+        cur->exit_status = -1;
         thread_exit();
+      }
       syscall_exit (*((int *)(f->esp+4)));
       break;
     case SYS_EXEC:
       if (!validate_user_memory (f->esp+4))
+      {
+        cur->exit_status = -1;
         thread_exit();
+      }
       syscall_exec (*((char **)(f->esp+4)));
       break;
     case SYS_WAIT:
-      printf ("WAIT!\n");
+      if (!validate_user_memory (f->esp+4))
+      {
+        cur->exit_status = -1;
+        thread_exit();
+      }
+      f->eax = process_wait (*((tid_t *)(f->esp+4)));
       break;
     case SYS_CREATE:
       printf ("CREATE!\n");

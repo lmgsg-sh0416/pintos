@@ -99,7 +99,8 @@ struct thread
     uint32_t *pagedir;                  /* Page directory. */
     struct list child_process;          /* List for direct child process */
     struct thread *parent;              /* Parent struct thread block */
-    int exit_status;                    /* Process exit status */
+    int exit_status;
+    struct semaphore exec_sema;
 #endif
 
     /* Owned by thread.c. */

@@ -24,6 +24,7 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 struct process {
   struct list_elem elem;
   tid_t process_id;
+  int exit_status;
   struct semaphore wait_sema;
 };
 
@@ -39,6 +40,7 @@ process_execute (const char *file_name)
   char *token, *save_ptr, *parse_ptr;
   int len;
   struct process *p;
+  struct thread *cur = thread_current ();
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
@@ -65,10 +67,7 @@ process_execute (const char *file_name)
   tid = thread_create (fn_copy, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
-  p = malloc (sizeof *p);
-  p->process_id = tid;
-  init_sema (&(p->wait_sema), 0);
-  list_push_back (&(thread_current ()->child_process), &(p->elem));
+  sema_down (&(cur->exec_sema));
   return tid;
 }
 
@@ -83,6 +82,8 @@ start_process (void *file_name_)
   char *esp_char, *fn_ptr;
   uint32_t *esp_int;
   uint32_t size, num = 0;
+  struct process *p;
+  struct thread *cur = thread_current ();
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -121,6 +122,16 @@ start_process (void *file_name_)
   if (!success) 
     thread_exit ();
 
+  /* Push back into child_process list. */
+  p = malloc (sizeof *p);
+  p->process_id = cur->tid;
+  p->exit_status = 0;
+  sema_init (&(p->wait_sema), 0);
+  list_push_back (&(cur->parent->child_process), &(p->elem));
+
+  /* Wake up parent process */
+  sema_up (&(cur->parent->exec_sema));
+
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -129,20 +140,6 @@ start_process (void *file_name_)
      and jump to it. */
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
-}
-
-struct mapping
-{
-  tid_t child_tid;
-  struct thread *t;
-};
-
-void
-sleep_thread (struct thread *t, void *aux)
-{
-  struct mapping *a = (struct mapping*) aux;
-  if (t->tid == a->child_tid)
-    a->t = t;
 }
 
 /* Waits for thread TID to die and returns its exit status.  If
@@ -157,29 +154,35 @@ sleep_thread (struct thread *t, void *aux)
 int
 process_wait (tid_t child_tid) 
 {
-  struct mapping a;
   struct thread *cur = thread_current ();
-  enum intr_level old_level;
+  struct list_elem *e;
+  struct process *p;
+  int exit_status;
 
-  a.child_tid = child_tid;
-  a.t = NULL;
-  old_level = intr_disable ();
-  thread_foreach (sleep_thread, &a);
-  intr_set_level (old_level);
-  // If it was terminated by the kernel,
-  if (a.t == NULL || a.t->parent_tid != cur->tid)
+  for (e = list_begin (&(cur->child_process)); e != list_end (&(cur->child_process));
+       e = list_next (e))
+    {
+      p = list_entry (e, struct process, elem);
+      if (p->process_id == child_tid)
+        break;
+    }
+  if (e == list_end (&(cur->child_process)))
     return -1;
-  sema_down (&(a.t->wait_sema));
-  return a.t->exit_status;
-  // Calling process_wait which has already been successfully isn't occured
+  sema_down (&(p->wait_sema));
+  exit_status = p->exit_status;
+  list_remove (&(p->elem));
+  free (p);
+  return exit_status;
 }
 
 /* Free the current process's resources. */
 void
 process_exit (void)
 {
-  struct thread *cur = thread_current ();
+  struct thread *cur = thread_current (), *parent;
   uint32_t *pd;
+  struct list_elem *e;
+  struct process *p;
 
   printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
 
@@ -199,8 +202,28 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
-  // Wake up parent if wait
-  sema_up (&(cur->wait_sema));
+  // Wake up parent if wait and save exit_status
+  parent = cur->parent;
+  if (parent != NULL)
+  {
+    for (e = list_begin (&(parent->child_process)); e != list_end (&(parent->child_process));
+         e = list_next (e))
+      {
+        p = list_entry (e, struct process, elem);
+        if (p->process_id == cur->tid)
+        {
+          p->exit_status = cur->exit_status;
+          sema_up (&(p->wait_sema));
+        }
+      }
+  }
+  // Destroy child_process chain
+  while (!list_empty (&(cur->child_process)))
+  {
+    e = list_pop_front (&(cur->child_process));
+    p = list_entry (e, struct process, elem);
+    free (p);
+  }
 }
 
 /* Sets up the CPU for running user code in the current

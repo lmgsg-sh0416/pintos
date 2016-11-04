@@ -98,6 +98,12 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+
+#ifdef USERPROG
+  initial_thread->parent = NULL;
+  list_init (&(initial_thread->child_process));
+  sema_init (&(initial_thread->exec_sema), 0);
+#endif
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -205,9 +211,9 @@ thread_create (const char *name, int priority,
   sf->ebp = 0;
 
 #ifdef USERPROG
-  list_init (&(t->child_process));
   t->parent = thread_current ();
-  t->exit_status = 0;
+  list_init (&(t->child_process));
+  sema_init (&(t->exec_sema), 0);
 #endif
 
   intr_set_level (old_level);
@@ -298,7 +304,6 @@ thread_exit (void)
 
 #ifdef USERPROG
   process_exit ();
-  thread_yield ();
 #endif
 
   /* Remove thread from all threads list, set our status to dying,
