@@ -4,6 +4,7 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "userprog/process.h"
 
 static void syscall_handler (struct intr_frame *);
 
@@ -13,30 +14,47 @@ syscall_init (void)
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
 }
 
+static bool
+validate_user_memory (void *vaddr)
+{
+  struct thread *cur = thread_current ();
+  return (pagedir_get_page (cur->pagedir, vaddr) != NULL);
+}
+
+static void
+syscall_exit (int status)
+{
+  thread_current ()->exit_status = status;
+  thread_exit();
+}
+
+static void
+syscall_exec (const char *cmd_line)
+{
+  process_execute (cmd_line);
+}
+
 static void
 syscall_handler (struct intr_frame *f) 
 {
-  if (!is_user_vaddr (f->esp))
+  int syscall_num;
+  if (!validate_user_memory (f->esp))
     thread_exit();
-
-  int num = *((int *)f->esp);
+  syscall_num = *((int *)f->esp);
   
-  switch (num) {
+  switch (syscall_num) {
     case SYS_HALT:
-      printf ("HALT!\n");
+      shutdown_power_off ();
       break;
     case SYS_EXIT:
-      if (!is_user_vaddr (f->esp+4))
+      if (!validate_user_memory (f->esp+4))
         thread_exit();
-
-      int status = *((int *)(f->esp+4));
-
-      thread_current ()->exit_status = status;
-
-      thread_exit();
+      syscall_exit (*((int *)(f->esp+4)));
       break;
     case SYS_EXEC:
-      printf ("EXEC!\n");
+      if (!validate_user_memory (f->esp+4))
+        thread_exit();
+      syscall_exec (*((char **)(f->esp+4)));
       break;
     case SYS_WAIT:
       printf ("WAIT!\n");
@@ -80,3 +98,4 @@ syscall_handler (struct intr_frame *f)
       break;
   }
 }
+

@@ -205,8 +205,9 @@ thread_create (const char *name, int priority,
   sf->ebp = 0;
 
 #ifdef USERPROG
-  sema_init (&(t->wait_sema), 0);
-  t->parent_tid = thread_current ()->tid;
+  list_init (&(t->child_process));
+  t->parent = thread_current ();
+  t->exit_status = 0;
 #endif
 
   intr_set_level (old_level);

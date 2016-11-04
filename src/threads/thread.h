@@ -97,9 +97,9 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-    tid_t parent_tid;                   /* Parent tid */
-    struct semaphore wait_sema;         /* Process wait */
-    int exit_status;
+    struct list child_process;          /* List for direct child process */
+    struct thread *parent;              /* Parent struct thread block */
+    int exit_status;                    /* Process exit status */
 #endif
 
     /* Owned by thread.c. */
