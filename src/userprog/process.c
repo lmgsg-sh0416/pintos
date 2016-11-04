@@ -75,10 +75,9 @@ start_process (void *file_name_)
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
-  struct thread *cur = thread_current ();
-  char *phy_esp, *fn_ptr;
-  uint32_t *argv_ptr;
-  uint32_t i, size, num = 0;
+  char *esp_char, *fn_ptr;
+  uint32_t *esp_int;
+  uint32_t size, num = 0;
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -87,35 +86,32 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
-  /* Push argument into stack */
-  phy_esp = (char*) pagedir_get_page (cur->pagedir, if_.esp);
   /* Algorithm for find size of parsing string and memcpy */
+  esp_char = (char*)if_.esp;
   fn_ptr = file_name;
-  while (file_name-fn_ptr<PGSIZE && !(*fn_ptr=='\0' && *(fn_ptr+1)=='\0'))
+  while (fn_ptr+1-file_name<+PGSIZE && !(*fn_ptr=='\0' && *(fn_ptr+1)=='\0'))
     fn_ptr++;
-  size = fn_ptr-file_name;
-  memcpy (phy_esp-size, file_name, size);
+  size = fn_ptr-file_name+1;
+  esp_char -= size;
+  memcpy (esp_char, file_name, size);
   /* word align */
-  if_.esp -= (size%4 ? size + (4 - size%4) : size);
+  esp_int = (uint32_t*)if_.esp;
+  while ((void*)esp_int > (void*)esp_char)
+    esp_int--;
   /* argv pointer array setting */
-  if_.esp -= 4; // argv[4] = 0
-  argv_ptr = (uint32_t*) pagedir_get_page (cur->pagedir, if_.esp);
-  for (i=0;i<size;i++)
-    if (*(char*)(PHYS_BASE-i-1) == '\0')
+  esp_int--;
+  *(esp_int--) = 0;
+  for (fn_ptr=esp_char; fn_ptr<PHYS_BASE; fn_ptr++)
+    if (*(fn_ptr-1) == '\0')
       {
-        if_.esp -= 4;
-        argv_ptr--; 
-        *argv_ptr = PHYS_BASE-i;
+        *(esp_int--) = (uint32_t*)fn_ptr;
         num++;
       }
-  if_.esp -= 4;
-  argv_ptr--; 
-  *argv_ptr = argv_ptr + 1;
-  /* argc */
-  if_.esp -= 4;
-  argv_ptr--; 
-  *argv_ptr = num;
-  
+  *(esp_int--) = (uint32_t*)esp_int+1;
+  *(esp_int) = num; 
+  printf("%x\n",esp_int);
+  if_.esp = (void*)esp_int;
+  hex_dump (16, PHYS_BASE-48, 48, true);
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
@@ -524,7 +520,7 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
-        *esp = PHYS_BASE - 12;
+        *esp = PHYS_BASE;
       else
         palloc_free_page (kpage);
     }
