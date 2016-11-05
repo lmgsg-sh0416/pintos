@@ -21,12 +21,13 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
-struct process {
-  struct list_elem elem;
-  tid_t process_id;
-  int exit_status;
-  struct semaphore wait_sema;
-};
+struct process
+  {
+    struct list_elem elem;
+    tid_t process_id;
+    int exit_status;
+    struct semaphore wait_sema;
+  };
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
