@@ -71,6 +71,7 @@ exception_print_stats (void)
 static void
 kill (struct intr_frame *f) 
 {
+	struct thread *cur = thread_current ();
   /* This interrupt is one (probably) caused by a user process.
      For example, the process might have tried to access unmapped
      virtual memory (a page fault).  For now, we simply kill the
@@ -79,6 +80,7 @@ kill (struct intr_frame *f)
      exceptions back to the process via signals, but we don't
      implement them. */
      
+	cur->exit_status = -1;
   /* The interrupt frame's code segment value tells us where the
      exception originated. */
   switch (f->cs)
