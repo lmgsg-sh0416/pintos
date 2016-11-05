@@ -50,7 +50,7 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  parse_copy = palloc_get_page (0);
+  parse_copy = palloc_get_page (PAL_ZERO);
   parse_ptr = parse_copy;
   /* Parsing */
   for (token = strtok_r (fn_copy, " ", &save_ptr); token != NULL;
@@ -68,7 +68,18 @@ process_execute (const char *file_name)
   tid = thread_create (fn_copy, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
-  sema_down (&(cur->exec_sema));
+  else
+  {
+    /* Push back into child_process list. */
+    p = malloc (sizeof *p);
+    p->process_id = tid;
+    p->exit_status = 0;
+    sema_init (&(p->wait_sema), 0);
+    list_push_back (&(cur->child_process), &(p->elem));
+
+    //sema_down (&(p->wait_sema));
+    sema_down (&(cur->exec_sema));
+  }
   return tid;
 }
 
@@ -93,45 +104,52 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
-  /* Algorithm for find size of parsing string and memcpy */
-  esp_char = (char*)if_.esp;
-  fn_ptr = file_name;
-  while (fn_ptr+1-file_name<+PGSIZE && !(*fn_ptr=='\0' && *(fn_ptr+1)=='\0'))
-    fn_ptr++;
-  size = fn_ptr-file_name+1;
-  esp_char -= size;
-  memcpy (esp_char, file_name, size);
-  /* word align */
-  esp_int = (uint32_t*)if_.esp;
-  while ((void*)esp_int > (void*)esp_char)
+  if (success)
+  {
+    /* Algorithm for find size of parsing string and memcpy */
+    esp_char = (char*)if_.esp;
+    fn_ptr = file_name;
+    while (fn_ptr+1-file_name<+PGSIZE && !(*fn_ptr=='\0' && *(fn_ptr+1)=='\0'))
+      fn_ptr++;
+    //printf("if_.esp: %x, size: %d\n", if_.esp, size);
+    size = fn_ptr-file_name+1;
+    esp_char -= size;
+    //printf("size: %d, esp_char: %x\n", size, esp_char);
+    memcpy (esp_char, file_name, size);
+    /* word align */
+    esp_int = (uint32_t*)if_.esp - 1;
+    while ((void*)esp_int > (void*)esp_char)
+      esp_int--;
+    /* argv and argc */
     esp_int--;
-  /* argv and argc */
-  esp_int--;
-  *(esp_int--) = 0;
-  for (fn_ptr=PHYS_BASE-1; fn_ptr>=esp_char; fn_ptr--)
-    if (*(fn_ptr-1) == '\0')
-      {
-        *(esp_int--) = (uint32_t*)fn_ptr;
-        num++;
-      }
-  *(esp_int--) = (uint32_t*)esp_int+1;
-  *(esp_int--) = num; 
-  if_.esp = (void*)esp_int;
+    //printf("esp_char: %x, esp_int: %x\n", esp_char, esp_int);
+    *(esp_int--) = 0;
+    for (fn_ptr=PHYS_BASE-1; fn_ptr>=esp_char; fn_ptr--)
+      if (*(fn_ptr-1) == '\0')
+        {
+          *(esp_int--) = (uint32_t*)fn_ptr;
+          num++;
+        }
+    *(esp_int--) = (uint32_t*)esp_int+1;
+    *(esp_int--) = num; 
+    if_.esp = (void*)esp_int;
+
+    /* Wake up parent process */
+    sema_up (&(cur->parent->exec_sema));
+  }
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
+
   if (!success) 
+  {
+    /* Use parent's exit_status as the child exit_status for only this time */
+    cur->parent->exit_status = -1;
+    /* Wake up parent process */
+    sema_up (&(cur->parent->exec_sema));
+    cur->exit_status = -1;
     thread_exit ();
-
-  /* Push back into child_process list. */
-  p = malloc (sizeof *p);
-  p->process_id = cur->tid;
-  p->exit_status = 0;
-  sema_init (&(p->wait_sema), 0);
-  list_push_back (&(cur->parent->child_process), &(p->elem));
-
-  /* Wake up parent process */
-  sema_up (&(cur->parent->exec_sema));
+  }
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
