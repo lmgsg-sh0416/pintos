@@ -3,8 +3,11 @@
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/malloc.h"
 #include "threads/vaddr.h"
 #include "userprog/process.h"
+#include "userprog/pagedir.h"
+#include "devices/shutdown.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 
@@ -34,7 +37,7 @@ validate_user_memory (void *vaddr)
 }
 
 static bool
-fd_less (struct list_elem *a, struct list_elem *b, void *aux UNUSED)
+fd_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
 {
   struct file_desc *a_fd = list_entry (a, struct file_desc, elem);
   struct file_desc *b_fd = list_entry (b, struct file_desc, elem);
@@ -64,6 +67,7 @@ syscall_create (const char *name, int32_t size)
   {
     cur->exit_status = -1;
     thread_exit();
+    return -1;
   }
 
   result = filesys_create (name, size);
@@ -81,6 +85,7 @@ syscall_remove (const char *name)
   {
     cur->exit_status = -1;
     thread_exit();
+    return -1;
   }
 
   result = filesys_remove (name);
@@ -97,19 +102,22 @@ syscall_open (const char *name)
   struct file_desc *fd;
 
   if (!validate_user_memory (name))
-  {
-    cur->exit_status = -1;
-    thread_exit ();
-  }
+    {
+      cur->exit_status = -1;
+      thread_exit ();
+
+      return -1;
+    }
 
   fd = malloc (sizeof (struct file_desc));
-  fd->file = filesys_open (name);
+  fd->num = -1;
 
+  fd->file = filesys_open (name);
   if (fd->file == NULL)
-  {
-    free (fd);
-    return -1;
-  }
+    {
+      free (fd);
+      return -1;
+    }
 
   if (list_empty (&fd_list))
     fd->num = 3;
@@ -127,6 +135,9 @@ syscall_open (const char *name)
             }
 
           num++;
+
+          if (list_next (e) == list_end (&fd_list))
+            fd->num = num;
         }
     }
 
@@ -138,15 +149,19 @@ syscall_open (const char *name)
 static void
 syscall_close (int fd)
 {
+  if (list_empty (&fd_list))
+    return;
+
   struct file_desc *fde;
   struct list_elem *e;
   for (e = list_begin (&fd_list); e != list_end (&fd_list); e = list_next (e))
     {
       fde = list_entry (e, struct file_desc, elem);
-      if (fde->num = fd)
+      if (fde->num == fd)
         break;
 
-      ASSERT (list_next (e) != NULL);
+      if (list_next (e) == list_end (&fd_list))
+        return;
     }
 
   file_close (fde->file);
@@ -165,12 +180,15 @@ syscall_read (int fd, char *buffer, unsigned size)
     cur->exit_status = -1;
     thread_exit();
   }
-
-  if (fd == 0)
+  
+  if (fd == STDIN_FILENO)
     for (read = 0; read < size; read++)
       *(buffer + read) = input_getc ();
-  else
+  else if (fd != STDOUT_FILENO)
     {
+      if (list_empty (&fd_list))
+        return read;
+
       struct file_desc *fde;
       struct list_elem *e;
       for (e = list_begin (&fd_list); e != list_end (&fd_list); e = list_next (e))
@@ -179,7 +197,8 @@ syscall_read (int fd, char *buffer, unsigned size)
           if (fde->num == fd)
             break;
 
-          ASSERT (list_next (e) != NULL);
+          if (list_next (e) == list_end (&fd_list))
+            return read;
         }
 
       read = file_read (fde->file, buffer, size);
@@ -200,7 +219,7 @@ syscall_write (int fd, const char *buffer, unsigned size)
     thread_exit();
   }
 
-  if (fd == 1)
+  if (fd == STDOUT_FILENO)
     {
       int remaining = size;
       while (remaining > 0)
@@ -211,8 +230,11 @@ syscall_write (int fd, const char *buffer, unsigned size)
 
       written = size;
     }
-  else 
+  else if (fd != STDIN_FILENO)
     {
+      if (list_empty (&fd_list))
+        return written;
+
       struct file_desc *fde;
       struct list_elem *e;
       for (e = list_begin (&fd_list); e != list_end (&fd_list); e = list_next (e)) 
@@ -220,8 +242,9 @@ syscall_write (int fd, const char *buffer, unsigned size)
           fde = list_entry (e, struct file_desc, elem);
           if (fde->num == fd)
             break;
-
-          ASSERT (list_next (e) != NULL);
+          
+          if (list_next (e) == list_end (&fd_list))
+            return written;
         }
 
       written = file_write (fde->file, buffer, size);
@@ -229,6 +252,37 @@ syscall_write (int fd, const char *buffer, unsigned size)
 
   return written;
 }
+
+static int 
+syscall_filesize (int fd)
+{
+  int size;
+  
+  struct file_desc *fde;
+  struct list_elem *e;
+  for (e = list_begin (&fd_list); e != list_end (&fd_list); e = list_next (e))
+    {
+      fde = list_entry (e, struct file_desc, elem);
+      if (fde->num == fd)
+        break;
+
+      if (list_next (e) == list_end (&fd_list))
+        return -1;
+    }
+
+  size = file_length (fde->file);
+  return size;
+}
+
+//static void seek (int fd, unsigned position)
+//{
+//
+//}
+//
+//static unsigned tell (int fd)
+//{
+//
+//}
 
 static void
 syscall_handler (struct intr_frame *f) 
@@ -304,7 +358,7 @@ syscall_handler (struct intr_frame *f)
       f->eax = syscall_open (*(char **)(f->esp + 4));
       break;
     case SYS_FILESIZE:
-      printf ("FILESIZE!\n");
+      f->eax = syscall_filesize (*((int *)(f->esp + 4)));
       break;
     case SYS_READ:
       f->eax = syscall_read (*((int *)(f->esp + 4)), *((char **)(f->esp + 8)), *((int *)(f->esp + 12)));
