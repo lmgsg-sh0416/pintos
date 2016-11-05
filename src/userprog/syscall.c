@@ -47,7 +47,7 @@ fd_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
 static void
 syscall_exit (int status)
 {
-  thread_current ()->exit_status = status;
+  thread_current ()->process->exit_status = status;
   thread_exit();
 }
 
@@ -58,7 +58,7 @@ syscall_exec (const char *cmd_line)
   tid_t result;
   if (!validate_user_memory (cmd_line))
   {
-    cur->exit_status = -1;
+    cur->process->exit_status = -1;
     thread_exit();
     return -1;
   }
@@ -66,12 +66,7 @@ syscall_exec (const char *cmd_line)
   if (result == TID_ERROR)
     return -1;
   else
-  {
-    if (cur->exit_status == -1)
-      return -1;
-    else
-      return result;
-  }
+    return result;
 }
 
 static bool
@@ -82,7 +77,7 @@ syscall_create (const char *name, int32_t size)
   
   if (!validate_user_memory (name))
   {
-    cur->exit_status = -1;
+    cur->process->exit_status = -1;
     thread_exit();
     return -1;
   }
@@ -100,7 +95,7 @@ syscall_remove (const char *name)
   
   if (!validate_user_memory (name))
   {
-    cur->exit_status = -1;
+    cur->process->exit_status = -1;
     thread_exit();
     return -1;
   }
@@ -120,7 +115,7 @@ syscall_open (const char *name)
 
   if (!validate_user_memory (name))
     {
-      cur->exit_status = -1;
+      cur->process->exit_status = -1;
       thread_exit ();
 
       return -1;
@@ -195,7 +190,7 @@ syscall_read (int fd, char *buffer, unsigned size)
   if (!validate_user_memory (buffer) ||
       !validate_user_memory (buffer + size - 1))
   {
-    cur->exit_status = -1;
+    cur->process->exit_status = -1;
     thread_exit();
   }
 
@@ -234,7 +229,7 @@ syscall_write (int fd, const char *buffer, unsigned size)
   if (!validate_user_memory (buffer) ||
       !validate_user_memory (buffer + size - 1))
   {
-    cur->exit_status = -1;
+    cur->process->exit_status = -1;
     thread_exit();
   }
 
@@ -245,7 +240,7 @@ syscall_write (int fd, const char *buffer, unsigned size)
         {
           if (!validate_user_memory (buffer + (remaining - size)))
             {
-              cur->exit_status = -1;
+              cur->process->exit_status = -1;
               thread_exit ();
               return -1;
             }
@@ -319,9 +314,11 @@ syscall_handler (struct intr_frame *f)
   struct thread *cur = thread_current ();
   int syscall_num;
   
+  ASSERT (cur->process != NULL);
+
   if (!validate_user_memory (f->esp))
   {
-    cur->exit_status = -1;
+    cur->process->exit_status = -1;
     thread_exit();
   }
 
@@ -335,7 +332,7 @@ syscall_handler (struct intr_frame *f)
     case SYS_WRITE:
       if (!validate_user_memory (f->esp+12))
       {
-        cur->exit_status = -1;
+        cur->process->exit_status = -1;
         thread_exit();
       }
     // Two argument
@@ -343,7 +340,7 @@ syscall_handler (struct intr_frame *f)
     case SYS_SEEK:
       if (!validate_user_memory (f->esp+8))
       {
-        cur->exit_status = -1;
+        cur->process->exit_status = -1;
         thread_exit();
       }
     // One argument
@@ -357,7 +354,7 @@ syscall_handler (struct intr_frame *f)
     case SYS_CLOSE:
       if (!validate_user_memory (f->esp+4))
       {
-        cur->exit_status = -1;
+        cur->process->exit_status = -1;
         thread_exit();
       }
     default:

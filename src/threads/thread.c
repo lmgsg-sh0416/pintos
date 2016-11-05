@@ -100,9 +100,11 @@ thread_init (void)
   initial_thread->tid = allocate_tid ();
 
 #ifdef USERPROG
-  initial_thread->parent = NULL;
   list_init (&(initial_thread->child_process));
+  initial_thread->process = NULL;
+  initial_thread->parent = NULL;        // root thread has no parent
   sema_init (&(initial_thread->exec_sema), 0);
+  sema_init (&(initial_thread->exec_sema2), 0);
 #endif
 }
 
@@ -211,9 +213,11 @@ thread_create (const char *name, int priority,
   sf->ebp = 0;
 
 #ifdef USERPROG
-  t->parent = thread_current ();
   list_init (&(t->child_process));
+  t->process = NULL;
+  t->parent = thread_current ();
   sema_init (&(t->exec_sema), 0);
+  sema_init (&(t->exec_sema2), 0);
 #endif
 
   intr_set_level (old_level);
@@ -481,10 +485,6 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
-
-#ifdef USERPROG
-  t->exit_status = 0;
-#endif
 
   list_push_back (&all_list, &t->allelem);
 }

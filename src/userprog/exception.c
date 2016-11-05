@@ -4,6 +4,7 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "userprog/process.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -79,8 +80,9 @@ kill (struct intr_frame *f)
      the kernel.  Real Unix-like operating systems pass most
      exceptions back to the process via signals, but we don't
      implement them. */
-     
-	cur->exit_status = -1;
+
+  if (cur->process != NULL) 
+	  cur->process->exit_status = -1;
   /* The interrupt frame's code segment value tells us where the
      exception originated. */
   switch (f->cs)

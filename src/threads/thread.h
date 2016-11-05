@@ -97,10 +97,11 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-    struct list child_process;          /* List for direct child process */
-    struct thread *parent;              /* Parent struct thread block */
-    int exit_status;
+    struct list child_process;          /* The list of child process. */
+    struct process *process;            /* Process information. */
+    struct thread *parent;              /* Parent thread */
     struct semaphore exec_sema;
+    struct semaphore exec_sema2;
 #endif
 
     /* Owned by thread.c. */

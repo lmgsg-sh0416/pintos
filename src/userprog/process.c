@@ -21,14 +21,6 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
-struct process
-  {
-    struct list_elem elem;
-    tid_t process_id;
-    int exit_status;
-    struct semaphore wait_sema;
-  };
-
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
@@ -42,6 +34,7 @@ process_execute (const char *file_name)
   int len;
   struct process *p;
   struct thread *cur = thread_current ();
+  enum intr_level old_level;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
@@ -68,17 +61,30 @@ process_execute (const char *file_name)
   tid = thread_create (fn_copy, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
+  /* If thread is created successfully, */
   else
   {
-    /* Push back into child_process list. */
-    p = malloc (sizeof *p);
+    /* Child thread can execute start_process until sema_up(exec_sema2).
+     * Make struct process and initialize. */
+    old_level = intr_disable ();
+    p = (struct process*) malloc (sizeof *p);
     p->process_id = tid;
-    p->exit_status = 0;
     sema_init (&(p->wait_sema), 0);
+    p->is_parent_dead = false;
     list_push_back (&(cur->child_process), &(p->elem));
-
-    //sema_down (&(p->wait_sema));
+    intr_set_level (old_level);
+    sema_up (&(cur->exec_sema2));
+    /* Parent thread wait until success is updated */
     sema_down (&(cur->exec_sema));
+    /* Need to gurantee that struct process isn't remove */
+    if (p->success == false)
+    {
+      old_level = intr_disable ();
+      list_remove (&(p->elem));
+      free (p);
+      intr_set_level (old_level);
+      return TID_ERROR;
+    }
   }
   return tid;
 }
@@ -94,8 +100,12 @@ start_process (void *file_name_)
   char *esp_char, *fn_ptr;
   uint32_t *esp_int;
   uint32_t size, num = 0;
+  struct list_elem *e;
   struct process *p;
   struct thread *cur = thread_current ();
+
+  /* Wait until struct process is pushed back into parent's child_process */
+  sema_down (&(cur->parent->exec_sema2));
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -133,23 +143,30 @@ start_process (void *file_name_)
     *(esp_int--) = (uint32_t*)esp_int+1;
     *(esp_int--) = num; 
     if_.esp = (void*)esp_int;
-
-    /* Wake up parent process */
-    sema_up (&(cur->parent->exec_sema));
   }
+
+  /* Find child process */
+  for (e = list_begin (&(cur->parent->child_process)); e != list_end (&(cur->parent->child_process));
+       e = list_next (e))
+  {
+    p = list_entry (e, struct process, elem);
+    if (p->process_id == cur->tid)
+      break;
+  }
+  ASSERT (e != list_end (&(cur->parent->child_process)));
+
+  if (success)
+    cur->process = p;
+  
+  p->success = success;
+  /* Wake up parent process */
+  sema_up (&(cur->parent->exec_sema));
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
 
   if (!success) 
-  {
-    /* Use parent's exit_status as the child exit_status for only this time */
-    cur->parent->exit_status = -1;
-    /* Wake up parent process */
-    sema_up (&(cur->parent->exec_sema));
-    cur->exit_status = -1;
     thread_exit ();
-  }
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -177,7 +194,9 @@ process_wait (tid_t child_tid)
   struct list_elem *e;
   struct process *p;
   int exit_status;
+  enum intr_level old_level;
 
+  old_level = intr_disable ();
   for (e = list_begin (&(cur->child_process)); e != list_end (&(cur->child_process));
        e = list_next (e))
     {
@@ -188,9 +207,14 @@ process_wait (tid_t child_tid)
   if (e == list_end (&(cur->child_process)))
     return -1;
   sema_down (&(p->wait_sema));
+  /* It means that corresponding child process is terminated so that we can remove struct process.
+   * Two ways to remove struct process
+   * 1. Here
+   * 2. Parent process is going to */
   exit_status = p->exit_status;
   list_remove (&(p->elem));
   free (p);
+  intr_set_level (old_level);
   return exit_status;
 }
 
@@ -198,12 +222,14 @@ process_wait (tid_t child_tid)
 void
 process_exit (void)
 {
-  struct thread *cur = thread_current (), *parent;
+  struct thread *cur = thread_current ();
   uint32_t *pd;
   struct list_elem *e;
   struct process *p;
+  enum intr_level old_level;
 
-  printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
+  if (cur->process != NULL)
+    printf ("%s: exit(%d)\n", cur->name, cur->process->exit_status);
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -221,28 +247,23 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
-  // Wake up parent if wait and save exit_status
-  parent = cur->parent;
-  if (parent != NULL)
+  old_level = intr_disable ();
+  /* It MUST be acceptable and valid for process */ 
+  if (cur->process != NULL)
   {
-    for (e = list_begin (&(parent->child_process)); e != list_end (&(parent->child_process));
-         e = list_next (e))
-      {
-        p = list_entry (e, struct process, elem);
-        if (p->process_id == cur->tid)
-        {
-          p->exit_status = cur->exit_status;
-          sema_up (&(p->wait_sema));
-        }
-      }
+    sema_up (&(cur->process->wait_sema));
+    if (cur->process->is_parent_dead)
+      free (cur->process);
   }
-  // Destroy child_process chain
+  /* Destroy child_process chain */
   while (!list_empty (&(cur->child_process)))
   {
     e = list_pop_front (&(cur->child_process));
     p = list_entry (e, struct process, elem);
-    free (p);
+    list_remove (&(p->elem));
+    p->is_parent_dead = true;
   }
+  intr_set_level (old_level);
 }
 
 /* Sets up the CPU for running user code in the current
