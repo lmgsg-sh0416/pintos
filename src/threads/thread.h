@@ -102,6 +102,7 @@ struct thread
     struct thread *parent;              /* Parent thread */
     struct semaphore exec_sema;
     struct semaphore exec_sema2;
+    struct file *executable;
 #endif
 
     /* Owned by thread.c. */

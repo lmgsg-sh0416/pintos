@@ -14,6 +14,7 @@
 #include "threads/flags.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
@@ -72,6 +73,7 @@ process_execute (const char *file_name)
     sema_init (&(p->wait_sema), 0);
     p->is_parent_dead = false;
     list_push_back (&(cur->child_process), &(p->elem));
+    list_init (&p->fd_table);
     intr_set_level (old_level);
     sema_up (&(cur->exec_sema2));
     /* Parent thread wait until success is updated */
@@ -229,7 +231,26 @@ process_exit (void)
   enum intr_level old_level;
 
   if (cur->process != NULL)
-    printf ("%s: exit(%d)\n", cur->name, cur->process->exit_status);
+    {
+      printf ("%s: exit(%d)\n", cur->name, cur->process->exit_status);
+      
+      if (!list_empty (&cur->process->fd_table))
+        {
+          struct file_desc *fde;
+          for (e = list_begin (&cur->process->fd_table); e != list_end (&cur->process->fd_table); )
+            {
+              fde = list_entry (e, struct file_desc, elem);
+              e = list_next (e);
+              file_close (fde->file);
+              free (fde);
+            }
+        }
+    }
+
+  if (cur->executable != NULL)
+    file_close (cur->executable);
+  
+  
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -462,7 +483,13 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  if (success)
+    {
+      t->executable = file;
+      file_deny_write (file);
+    }
+  else
+    file_close (file);
   return success;
 }
 

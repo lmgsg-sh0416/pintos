@@ -11,22 +11,12 @@
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 
-struct file_desc
-  {
-    int num;
-    struct file *file;
-    struct list_elem elem;
-  };
-
-static struct list fd_list;
-
 static void syscall_handler (struct intr_frame *);
 
 void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
-  list_init (&fd_list);
 }
 
 static bool
@@ -90,12 +80,12 @@ syscall_create (const char *name, int32_t size)
 static bool
 syscall_remove (const char *name)
 {
-  struct thread *cur = thread_current ();
+  struct process *cur = thread_current ()->process;
   bool result;
   
   if (!validate_user_memory (name))
   {
-    cur->process->exit_status = -1;
+    cur->exit_status = -1;
     thread_exit();
     return -1;
   }
@@ -110,18 +100,18 @@ syscall_remove (const char *name)
 static int
 syscall_open (const char *name)
 {
-  struct thread *cur = thread_current ();
+  struct process *cur = thread_current ()->process;
   struct file_desc *fd;
 
   if (!validate_user_memory (name))
     {
-      cur->process->exit_status = -1;
+      cur->exit_status = -1;
       thread_exit ();
 
       return -1;
     }
 
-  fd = malloc (sizeof (struct file_desc));
+  fd = malloc (sizeof (*fd));
   fd->num = -1;
 
   fd->file = filesys_open (name);
@@ -131,13 +121,13 @@ syscall_open (const char *name)
       return -1;
     }
 
-  if (list_empty (&fd_list))
+  if (list_empty (&cur->fd_table))
     fd->num = 3;
   else 
     {
       int num = 3;
       struct list_elem *e;
-      for (e = list_begin (&fd_list); e != list_end (&fd_list); e = list_next (e))
+      for (e = list_begin (&cur->fd_table); e != list_end (&cur->fd_table); e = list_next (e))
         {
           struct file_desc *fde = list_entry (e, struct file_desc, elem);
           if (num < fde->num)
@@ -148,12 +138,12 @@ syscall_open (const char *name)
 
           num++;
 
-          if (list_next (e) == list_end (&fd_list))
+          if (list_next (e) == list_end (&cur->fd_table))
             fd->num = num;
         }
     }
 
-  list_insert_ordered (&fd_list, &fd->elem, fd_less, NULL);
+  list_insert_ordered (&cur->fd_table, &fd->elem, fd_less, NULL);
 
   return fd->num;
 }
@@ -161,18 +151,20 @@ syscall_open (const char *name)
 static void
 syscall_close (int fd)
 {
+  struct process *cur = thread_current ()->process;
+
   struct file_desc *fde;
   struct list_elem *e;
-  if (list_empty (&fd_list))
+  if (list_empty (&cur->fd_table))
     return;
 
-  for (e = list_begin (&fd_list); e != list_end (&fd_list); e = list_next (e))
+  for (e = list_begin (&cur->fd_table); e != list_end (&cur->fd_table); e = list_next (e))
     {
       fde = list_entry (e, struct file_desc, elem);
       if (fde->num == fd)
         break;
 
-      if (list_next (e) == list_end (&fd_list))
+      if (list_next (e) == list_end (&cur->fd_table))
         return;
     }
 
@@ -184,13 +176,13 @@ syscall_close (int fd)
 static int
 syscall_read (int fd, char *buffer, unsigned size)
 {
-  struct thread *cur = thread_current ();
+  struct process *cur = thread_current ()->process;
   int read = -1;
   
   if (!validate_user_memory (buffer) ||
       !validate_user_memory (buffer + size - 1))
   {
-    cur->process->exit_status = -1;
+    cur->exit_status = -1;
     thread_exit();
   }
 
@@ -201,16 +193,16 @@ syscall_read (int fd, char *buffer, unsigned size)
     {
       struct file_desc *fde;
       struct list_elem *e;
-      if (list_empty (&fd_list))
+      if (list_empty (&cur->fd_table))
         return read;
 
-      for (e = list_begin (&fd_list); e != list_end (&fd_list); e = list_next (e))
+      for (e = list_begin (&cur->fd_table); e != list_end (&cur->fd_table); e = list_next (e))
         {
           fde = list_entry (e, struct file_desc, elem);
           if (fde->num == fd)
             break;
 
-          if (list_next (e) == list_end (&fd_list))
+          if (list_next (e) == list_end (&cur->fd_table))
             return read;
         }
 
@@ -223,13 +215,13 @@ syscall_read (int fd, char *buffer, unsigned size)
 static int
 syscall_write (int fd, const char *buffer, unsigned size)
 {
-  struct thread *cur = thread_current ();
+  struct process *cur = thread_current ()->process;
   int written = -1;
   
   if (!validate_user_memory (buffer) ||
       !validate_user_memory (buffer + size - 1))
   {
-    cur->process->exit_status = -1;
+    cur->exit_status = -1;
     thread_exit();
   }
 
@@ -240,7 +232,7 @@ syscall_write (int fd, const char *buffer, unsigned size)
         {
           if (!validate_user_memory (buffer + (remaining - size)))
             {
-              cur->process->exit_status = -1;
+              cur->exit_status = -1;
               thread_exit ();
               return -1;
             }
@@ -255,16 +247,16 @@ syscall_write (int fd, const char *buffer, unsigned size)
     {
       struct file_desc *fde;
       struct list_elem *e;
-      if (list_empty (&fd_list))
+      if (list_empty (&cur->fd_table))
         return written;
 
-      for (e = list_begin (&fd_list); e != list_end (&fd_list); e = list_next (e)) 
+      for (e = list_begin (&cur->fd_table); e != list_end (&cur->fd_table); e = list_next (e)) 
         {
           fde = list_entry (e, struct file_desc, elem);
           if (fde->num == fd)
             break;
           
-          if (list_next (e) == list_end (&fd_list))
+          if (list_next (e) == list_end (&cur->fd_table))
             return written;
         }
 
@@ -277,20 +269,21 @@ syscall_write (int fd, const char *buffer, unsigned size)
 static int 
 syscall_filesize (int fd)
 {
+  struct process *cur = thread_current ()->process;
   int size = -1;
 
   struct file_desc *fde;
   struct list_elem *e;
-  if (list_empty (&fd_list))
+  if (list_empty (&cur->fd_table))
     return size;
 
-  for (e = list_begin (&fd_list); e != list_end (&fd_list); e = list_next (e))
+  for (e = list_begin (&cur->fd_table); e != list_end (&cur->fd_table); e = list_next (e))
     {
       fde = list_entry (e, struct file_desc, elem);
       if (fde->num == fd)
         break;
 
-      if (list_next (e) == list_end (&fd_list))
+      if (list_next (e) == list_end (&cur->fd_table))
         return size;
     }
 
@@ -298,15 +291,53 @@ syscall_filesize (int fd)
   return size;
 }
 
-//static void seek (int fd, unsigned position)
-//{
-//
-//}
-//
-//static unsigned tell (int fd)
-//{
-//
-//}
+static void
+syscall_seek (int fd, unsigned position)
+{
+  struct process *cur = thread_current ()->process;
+
+  struct file_desc *fde;
+  struct list_elem *e;
+  if (list_empty (&cur->fd_table))
+    return;
+
+  for (e = list_begin (&cur->fd_table); e != list_end (&cur->fd_table); e = list_next (e))
+    {
+      fde = list_entry (e, struct file_desc, elem);
+      if (fde->num == fd)
+        break;
+
+      if (list_next (e) == list_end (&cur->fd_table))
+        return;
+    }
+  
+  file_seek (fde->file, position);
+}
+
+static unsigned
+syscall_tell (int fd)
+{
+  struct process *cur = thread_current ()->process;
+  unsigned pos = 0;
+
+  struct file_desc *fde;
+  struct list_elem *e;
+  if (list_empty (&cur->fd_table))
+    return pos;
+
+  for (e = list_begin (&cur->fd_table); e != list_end (&cur->fd_table); e = list_next (e))
+    {
+      fde = list_entry (e, struct file_desc, elem);
+      if (fde->num == fd)
+        break;
+
+      if (list_next (e) == list_end (&cur->fd_table))
+        return pos;
+    }
+
+  pos = file_tell (fde->file);
+  return pos;
+}
 
 static void
 syscall_handler (struct intr_frame *f) 
@@ -393,10 +424,10 @@ syscall_handler (struct intr_frame *f)
       f->eax = syscall_write (*((int *)(f->esp + 4)), *((char **)(f->esp + 8)), *((int *)(f->esp + 12)));
       break;
     case SYS_SEEK:
-      printf ("SEEK!\n");
+      syscall_seek (*((int *)(f->esp + 4)), *((unsigned *)(f->esp + 8)));
       break;
     case SYS_TELL:
-      printf ("TELL!\n");
+      f->eax = syscall_tell (*((int *)(f->esp + 4)));
       break;
     case SYS_CLOSE:
       syscall_close (*((int *)(f->esp + 4)));

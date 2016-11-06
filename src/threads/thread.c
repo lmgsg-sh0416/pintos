@@ -218,6 +218,7 @@ thread_create (const char *name, int priority,
   t->parent = thread_current ();
   sema_init (&(t->exec_sema), 0);
   sema_init (&(t->exec_sema2), 0);
+  t->executable = NULL;
 #endif
 
   intr_set_level (old_level);
