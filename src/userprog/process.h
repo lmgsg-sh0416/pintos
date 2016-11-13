@@ -18,6 +18,7 @@ struct process
     struct semaphore wait_sema;     /* semaphore for this process */
     bool success;                   /* load success? */
     bool is_parent_dead;            /* is parent dead? */
+    bool is_child_dead;             /* is child dead? */
     struct list fd_table;
   };
 

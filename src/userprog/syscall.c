@@ -406,7 +406,7 @@ syscall_handler (struct intr_frame *f)
       f->eax = process_wait (*((tid_t *)(f->esp+4)));
       break;
     case SYS_CREATE:
-      f->eax = syscall_create (*((char **)(f->esp + 4)), *((int32_t *)(f->esp + 8)));
+      f->eax = syscall_create (*((char **)(f->esp + 4)), *((unsigned *)(f->esp + 8)));
       break;
     case SYS_REMOVE:
       f->eax = syscall_remove (*(char **)(f->esp + 4));

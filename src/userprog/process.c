@@ -72,13 +72,13 @@ process_execute (const char *file_name)
     p->process_id = tid;
     sema_init (&(p->wait_sema), 0);
     p->is_parent_dead = false;
+    p->is_child_dead = false;
     list_push_back (&(cur->child_process), &(p->elem));
     list_init (&p->fd_table);
     intr_set_level (old_level);
     sema_up (&(cur->exec_sema2));
     /* Parent thread wait until success is updated */
     sema_down (&(cur->exec_sema));
-    /* Need to gurantee that struct process isn't remove */
     if (p->success == false)
     {
       old_level = intr_disable ();
@@ -123,10 +123,8 @@ start_process (void *file_name_)
     fn_ptr = file_name;
     while (fn_ptr+1-file_name<+PGSIZE && !(*fn_ptr=='\0' && *(fn_ptr+1)=='\0'))
       fn_ptr++;
-    //printf("if_.esp: %x, size: %d\n", if_.esp, size);
     size = fn_ptr-file_name+1;
     esp_char -= size;
-    //printf("size: %d, esp_char: %x\n", size, esp_char);
     memcpy (esp_char, file_name, size);
     /* word align */
     esp_int = (uint32_t*)if_.esp - 1;
@@ -134,7 +132,6 @@ start_process (void *file_name_)
       esp_int--;
     /* argv and argc */
     esp_int--;
-    //printf("esp_char: %x, esp_int: %x\n", esp_char, esp_int);
     *(esp_int--) = 0;
     for (fn_ptr=PHYS_BASE-1; fn_ptr>=esp_char; fn_ptr--)
       if (*(fn_ptr-1) == '\0')
@@ -209,10 +206,11 @@ process_wait (tid_t child_tid)
   if (e == list_end (&(cur->child_process)))
     return -1;
   sema_down (&(p->wait_sema));
-  /* It means that corresponding child process is terminated so that we can remove struct process.
+  /* It means that corresponding child process is terminated 
+   * so that we can remove struct process.
    * Two ways to remove struct process
    * 1. Here
-   * 2. Parent process is going to */
+   * 2. process_exit */
   exit_status = p->exit_status;
   list_remove (&(p->elem));
   free (p);
@@ -250,8 +248,6 @@ process_exit (void)
   if (cur->executable != NULL)
     file_close (cur->executable);
   
-  
-
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -273,6 +269,7 @@ process_exit (void)
   if (cur->process != NULL)
   {
     sema_up (&(cur->process->wait_sema));
+    cur->process->is_child_dead = true;
     if (cur->process->is_parent_dead)
       free (cur->process);
   }
@@ -283,6 +280,8 @@ process_exit (void)
     p = list_entry (e, struct process, elem);
     list_remove (&(p->elem));
     p->is_parent_dead = true;
+    if (p->is_child_dead)
+      free (p);
   }
   intr_set_level (old_level);
 }
