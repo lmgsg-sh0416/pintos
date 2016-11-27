@@ -103,6 +103,7 @@ struct thread
     struct semaphore exec_sema;
     struct semaphore exec_sema2;
     struct file *executable;
+    struct hash sup_pt;
 #endif
 
     /* Owned by thread.c. */

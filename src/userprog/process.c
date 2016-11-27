@@ -387,6 +387,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
+  hash_init (&t->sup_pt, upage_hash, upage_less, NULL);
   if (t->pagedir == NULL) 
     goto done;
   process_activate ();
@@ -416,6 +417,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   file_ofs = ehdr.e_phoff;
   for (i = 0; i < ehdr.e_phnum; i++) 
     {
+      struct sup_pte *spte = palloc_get_page (PAL_USER);
       struct Elf32_Phdr phdr;
 
       if (file_ofs < 0 || file_ofs > file_length (file))
@@ -441,29 +443,32 @@ load (const char *file_name, void (**eip) (void), void **esp)
         case PT_LOAD:
           if (validate_segment (&phdr, file)) 
             {
-              bool writable = (phdr.p_flags & PF_W) != 0;
-              uint32_t file_page = phdr.p_offset & ~PGMASK;
-              uint32_t mem_page = phdr.p_vaddr & ~PGMASK;
-              uint32_t page_offset = phdr.p_vaddr & PGMASK;
-              uint32_t read_bytes, zero_bytes;
+              spte->writable = (phdr.p_flags & PF_W) != 0;
+              spte->offset = phdr.p_offset & ~PGMASK;
+              spte->upage = phdr.p_vaddr & ~PGMASK;
+              spte->start_vaddr = phdr.p_vaddr;
+              spte->end_vaddr = phdr.p_memsz;
               if (phdr.p_filesz > 0)
                 {
                   /* Normal segment.
                      Read initial part from disk and zero the rest. */
-                  read_bytes = page_offset + phdr.p_filesz;
-                  zero_bytes = (ROUND_UP (page_offset + phdr.p_memsz, PGSIZE)
-                                - read_bytes);
+                  spte->read_bytes = page_offset + phdr.p_filesz;
+                  spte->zero_bytes = (ROUND_UP (page_offset + phdr.p_memsz, PGSIZE)
+                                      - spte->read_bytes);
+                  spte->type = SPTE_FILE;
                 }
               else 
                 {
                   /* Entirely zero.
                      Don't read anything from disk. */
-                  read_bytes = 0;
-                  zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
+                  spte->read_bytes = 0;
+                  spte->zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
+                  spte->type = SPTE_ZERO;
                 }
-              if (!load_segment (file, file_page, (void *) mem_page,
-                                 read_bytes, zero_bytes, writable))
-                goto done;
+//              if (!load_segment (file, file_page, (void *) mem_page,
+//                                 read_bytes, zero_bytes, writable))
+//                goto done;
+              hash_insert (&t->sup_pt, &spte->elem);
             }
           else
             goto done;
@@ -564,39 +569,26 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (ofs % PGSIZE == 0);
 
   file_seek (file, ofs);
-  while (read_bytes > 0 || zero_bytes > 0) 
+  /* Get a page of memory. */
+  uint8_t *kpage = palloc_get_page (PAL_USER);
+  if (kpage == NULL)
+    return false;
+
+  /* Load this page. */
+  if (file_read (file, kpage, read_bytes) != (int) read_bytes)
     {
-      /* Calculate how to fill this page.
-         We will read PAGE_READ_BYTES bytes from FILE
-         and zero the final PAGE_ZERO_BYTES bytes. */
-      size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
-      size_t page_zero_bytes = PGSIZE - page_read_bytes;
-
-      /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
-      if (kpage == NULL)
-        return false;
-
-      /* Load this page. */
-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
-        {
-          palloc_free_page (kpage);
-          return false; 
-        }
-      memset (kpage + page_read_bytes, 0, page_zero_bytes);
-
-      /* Add the page to the process's address space. */
-      if (!install_page (upage, kpage, writable)) 
-        {
-          palloc_free_page (kpage);
-          return false; 
-        }
-
-      /* Advance. */
-      read_bytes -= page_read_bytes;
-      zero_bytes -= page_zero_bytes;
-      upage += PGSIZE;
+      palloc_free_page (kpage);
+      return false; 
     }
+  memset (kpage + read_bytes, 0, zero_bytes);
+
+  /* Add the page to the process's address space. */
+  if (!install_page (upage, kpage, writable)) 
+    {
+      palloc_free_page (kpage);
+      return false; 
+    }
+
   return true;
 }
 
