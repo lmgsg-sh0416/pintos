@@ -27,7 +27,6 @@ int process_wait (tid_t);
 void process_exit (void);
 void process_activate (void);
 bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
-                   uint32_t read_bytes, uint32_t zero_bytes,
-                   bool writable);
+                   uint32_t read_bytes, bool writable);
 
 #endif /* userprog/process.h */

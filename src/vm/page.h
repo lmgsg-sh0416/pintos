@@ -6,30 +6,35 @@
 #include <hash.h>
 #include "filesys/file.h"
 
-enum sup_pte_type {
-  SPTE_FILE,
-  SPTE_ZERO,
-  SPTE_SWAP
+enum page_type {
+  PAGE_FILE,
+  PAGE_ZERO,
+  PAGE_SWAP
 };
 
-struct sup_pte {
-  enum sup_pte_type type;
-  void *upage; // start page
-  void *kpage;
+struct page {
+  enum page_type type;
+
+  /* Memory view */
   void *start_vaddr;
   void *end_vaddr;
+  void *upage;        // Alignment for start_vaddr
 
-  struct file *file;
-  off_t offset;
+  /* File view */
+  off_t file_offset;
+  uint32_t read_bytes;
+
+  /* Writeable */
   bool writable;
 
-  uint32_t read_bytes;
-  uint32_t zero_bytes;
-
+  /* Hash */
   struct hash_elem elem;
 };
 
-unsigned upage_hash (const struct hash_elem *e, void *aux);
-bool upage_less (const struct hash_elem *a, const struct hash_elem *b, void *aux);
+unsigned upage_hash (const struct hash_elem *_e, void *aux);
+bool upage_less (const struct hash_elem *_a, const struct hash_elem *_b, void *aux);
+void init_sup_pagedir (void);
+bool insert_page_entry (enum page_type type, void *upage, void *start_vaddr, void *end_vaddr, 
+    off_t file_offset, uint32_t read_bytes, bool writable);
 
 #endif /* vm/page.h */

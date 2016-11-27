@@ -132,9 +132,9 @@ page_fault (struct intr_frame *f)
   bool write;        /* True: access was write, false: access was read. */
   bool user;         /* True: access by user, false: access by kernel. */
   void *fault_addr;  /* Fault address. */
-  struct sup_pte temp, *spte;
-  struct hash_elem *e;
   struct thread *cur = thread_current ();
+  struct hash_iterator i;
+  struct page *spte;
 
   /* Obtain faulting address, the virtual address that was
      accessed to cause the fault.  It may point to code or to
@@ -160,28 +160,34 @@ page_fault (struct intr_frame *f)
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
-  temp.upage = fault_addr;
-  e = hash_find (&cur->sup_pt, &temp.elem);
-  spte = hash_entry (e, struct sup_pte, elem);
-
-  if (spte->type == SPTE_FILE)
+  hash_first (&i, &(cur->sup_pagedir));
+  while (hash_next (&i))
     {
-      uint32_t faddr = fault_addr;
-      void *page = ROUND_DOWN (faddr, PGSIZE);
+      spte = hash_entry (hash_cur (&i), struct page, elem);
+      if (spte->start_vaddr <= fault_addr && fault_addr <= spte->end_vaddr)
+        break;
+    }
+  if (hash_cur (&i) == NULL)
+    kill (f);
+
+  if (spte->type == PAGE_FILE || spte->type == PAGE_ZERO)
+    {
+      void *page = pg_round_down (fault_addr);
       off_t diff = page - spte->upage;
-      off_t off = spte->offset + diff;
-      uint32_t read_bytes = (spte->read_bytes - diff) > PGSIZE ? PGSIZE : spte->read_bytes;
-      if (!load_segment (spte->file, off, page, read_bytes, 
-                         PGSIZE - read_bytes, spte->writable))
+      off_t off = spte->file_offset + diff;
+      uint32_t read_bytes = spte->read_bytes>=diff ? spte->read_bytes-diff : spte->read_bytes;
+      read_bytes = read_bytes > PGSIZE ? PGSIZE : read_bytes;
+//      printf("page: %x, spte->upage: %x\n", page, spte->upage);
+//      printf("diff: %d\n", diff);
+//      printf("off: %d\n", off);
+//      printf("spte->read_bytes: %d\n", spte->read_bytes);
+//      printf("read_bytes: %d\n", read_bytes);
+      if (!load_segment (cur->executable, off, page, read_bytes, spte->writable))
         kill (f);
     }
-  else if (spte->type == SPTE_ZERO)
+  else if (spte->type == PAGE_SWAP)
     {
-      
-    }
-  else if (spte->type == SPTE_SWAP)
-    {
-
+      kill (f);
     }
   else
     {

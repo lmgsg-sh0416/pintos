@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include <hash.h>
 #include "threads/synch.h"
 #include "vm/page.h"
 
@@ -104,7 +105,7 @@ struct thread
     struct semaphore exec_sema;
     struct semaphore exec_sema2;
     struct file *executable;
-    struct hash sup_pt;
+    struct hash sup_pagedir;
 #endif
 
     /* Owned by thread.c. */
