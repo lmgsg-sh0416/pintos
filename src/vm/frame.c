@@ -1,11 +1,13 @@
 #include <list.h>
-#include "vm/frame.h"
 #include "threads/thread.h"
 #include "threads/palloc.h"
 #include "threads/malloc.h"
+#include "threads/synch.h"
 #include "userprog/pagedir.h"
+#include "vm/frame.h"
 
 static struct list frame_table;
+static struct lock frame_lock;
 
 /* return null if eviction fail */
 static void*
@@ -44,6 +46,7 @@ void
 init_frame_table (void)
 {
   list_init (&frame_table);
+  lock_init (&frame_lock);
 }
 
 void*
@@ -51,9 +54,11 @@ insert_frame_entry (uint32_t *pd, void *upage, enum palloc_flags flags)
 {
   struct frame_entry *f;
   void *frame = palloc_get_page (flags);
+  lock_acquire (&frame_lock);
   if (frame == NULL)
     {
-      frame = evict ();
+      //frame = evict ();
+      frame = NULL;
       ASSERT (frame != NULL);   // induce kernel panic when no one can be evicted
     }
   f = (struct frame_entry*) malloc (sizeof *f);
@@ -62,6 +67,7 @@ insert_frame_entry (uint32_t *pd, void *upage, enum palloc_flags flags)
   f->upage = upage;
   lock_init (&(f->lock));
   list_push_back (&frame_table, &(f->elem));
+  lock_release (&frame_lock);
   return frame;
 }
 
@@ -70,6 +76,7 @@ remove_frame_entry (uint32_t *pd, void *upage)
 {
   struct frame_entry *f;
   struct list_elem *e;
+  lock_acquire (&frame_lock);
   for (e = list_begin(&frame_table); e != list_end (&frame_table);
        e = list_next (e))
     {
@@ -81,4 +88,5 @@ remove_frame_entry (uint32_t *pd, void *upage)
   palloc_free_page (f->frame);
   list_remove (&(f->elem));
   free (f);
+  lock_release (&frame_lock);
 }

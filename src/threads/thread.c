@@ -13,6 +13,7 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "vm/frame.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -105,6 +106,7 @@ thread_init (void)
   initial_thread->parent = NULL;        // root thread has no parent
   sema_init (&(initial_thread->exec_sema), 0);
   sema_init (&(initial_thread->exec_sema2), 0);
+  init_frame_table ();
 #endif
 }
 
