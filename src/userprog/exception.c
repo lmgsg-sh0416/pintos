@@ -1,10 +1,12 @@
 #include "userprog/exception.h"
 #include <inttypes.h>
 #include <stdio.h>
+#include <round.h>
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "userprog/process.h"
+#include "threads/vaddr.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -158,13 +160,14 @@ page_fault (struct intr_frame *f)
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
-  spte.upage = fault_addr;
-  e = hash_find (&cur->sup_pt, &p.elem);
+  temp.upage = fault_addr;
+  e = hash_find (&cur->sup_pt, &temp.elem);
   spte = hash_entry (e, struct sup_pte, elem);
 
   if (spte->type == SPTE_FILE)
     {
-      void *page = ROUND_DOWN (fault_addr, PGSIZE);
+      uint32_t faddr = fault_addr;
+      void *page = ROUND_DOWN (faddr, PGSIZE);
       off_t diff = page - spte->upage;
       off_t off = spte->offset + diff;
       uint32_t read_bytes = (spte->read_bytes - diff) > PGSIZE ? PGSIZE : spte->read_bytes;

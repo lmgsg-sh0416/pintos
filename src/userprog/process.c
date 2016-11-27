@@ -367,9 +367,6 @@ struct Elf32_Phdr
 
 static bool setup_stack (void **esp);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
-static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
-                          uint32_t read_bytes, uint32_t zero_bytes,
-                          bool writable);
 
 /* Loads an ELF executable from FILE_NAME into the current thread.
    Stores the executable's entry point into *EIP
@@ -443,11 +440,14 @@ load (const char *file_name, void (**eip) (void), void **esp)
         case PT_LOAD:
           if (validate_segment (&phdr, file)) 
             {
+              uint32_t page_offset = phdr.p_vaddr & PGMASK;
+
               spte->writable = (phdr.p_flags & PF_W) != 0;
               spte->offset = phdr.p_offset & ~PGMASK;
               spte->upage = phdr.p_vaddr & ~PGMASK;
               spte->start_vaddr = phdr.p_vaddr;
               spte->end_vaddr = phdr.p_memsz;
+              
               if (phdr.p_filesz > 0)
                 {
                   /* Normal segment.
@@ -560,24 +560,25 @@ validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
 
    Return true if successful, false if a memory allocation error
    or disk read error occurs. */
-static bool
+bool
 load_segment (struct file *file, off_t ofs, uint8_t *upage,
               uint32_t read_bytes, uint32_t zero_bytes, bool writable) 
 {
+  struct thread *cur = thread_current ();
   ASSERT ((read_bytes + zero_bytes) % PGSIZE == 0);
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
 
   file_seek (file, ofs);
   /* Get a page of memory. */
-  uint8_t *kpage = palloc_get_page (PAL_USER);
+  uint8_t *kpage = insert_frame_entry (cur->pagedir, upage);
   if (kpage == NULL)
     return false;
 
   /* Load this page. */
   if (file_read (file, kpage, read_bytes) != (int) read_bytes)
     {
-      palloc_free_page (kpage);
+      remove_frame_entry (cur->pagedir, upage);
       return false; 
     }
   memset (kpage + read_bytes, 0, zero_bytes);
@@ -585,7 +586,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   /* Add the page to the process's address space. */
   if (!install_page (upage, kpage, writable)) 
     {
-      palloc_free_page (kpage);
+      remove_frame_entry (cur->pagedir, upage);
       return false; 
     }
 
@@ -597,17 +598,18 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (void **esp) 
 {
+  struct thread *cur = thread_current ();
   uint8_t *kpage;
   bool success = false;
 
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  kpage = insert_frame_entry (cur->pagedir, PHYS_BASE-PGSIZE, PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
         *esp = PHYS_BASE;
       else
-        palloc_free_page (kpage);
+        remove_frame_entry (cur->pagedir, PHYS_BASE-PGSIZE);
     }
   return success;
 }

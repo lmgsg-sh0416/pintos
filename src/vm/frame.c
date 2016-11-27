@@ -20,17 +20,17 @@ evict (void)
       e = list_pop_front (&frame_table);
       f = list_entry (e, struct frame_entry, elem);
       // clock algorithm
-      if (pagedir_is_accessed (f->pd, f->uaddr))
+      if (pagedir_is_accessed (f->pd, f->upage))
         {
-          pagedir_set_accessed (f->pd, f->uaddr, false);
+          pagedir_set_accessed (f->pd, f->upage, false);
           list_push_back (&frame_table, &(f->elem));
         }
       else
         {
-          success = allocate_swap_slot (f->pd, f->uaddr, f->frame);
+          success = allocate_swap_slot (f->pd, f->upage, f->frame);
           if (!success)
             return NULL;
-          pagedir_clear_page (f->pd, f->uaddr);
+          pagedir_clear_page (f->pd, f->upage);
           palloc_free_page (f->frame);
           p = palloc_get_page (PAL_USER);
           free (f);
@@ -47,10 +47,10 @@ init_frame_table (void)
 }
 
 void*
-insert_frame_entry (uint32_t *pd, void *uaddr)
+insert_frame_entry (uint32_t *pd, void *upage, enum palloc_flags flags)
 {
   struct frame_entry *f;
-  void *frame = palloc_get_page (PAL_USER);
+  void *frame = palloc_get_page (flags);
   if (frame == NULL)
     {
       frame = evict ();
@@ -59,8 +59,26 @@ insert_frame_entry (uint32_t *pd, void *uaddr)
   f = (struct frame_entry*) malloc (sizeof *f);
   f->frame = frame;
   f->pd = pd;
-  f->uaddr = uaddr;
+  f->upage = upage;
   lock_init (&(f->lock));
   list_push_back (&frame_table, &(f->elem));
   return frame;
+}
+
+void
+remove_frame_entry (uint32_t *pd, void *upage)
+{
+  struct frame_entry *f;
+  struct list_elem *e;
+  for (e = list_begin(&frame_table); e != list_end (&frame_table);
+       e = list_next (e))
+    {
+      f = list_entry (e, struct frame_entry, elem);
+      if (f->pd == pd && f->upage == upage)
+        break;
+    }
+  ASSERT (e != list_end (&frame_table));
+  palloc_free_page (f->frame);
+  list_remove (&(f->elem));
+  free (f);
 }
