@@ -23,7 +23,7 @@ static bool
 validate_user_memory (void *vaddr)
 {
   struct thread *cur = thread_current ();
-  return (is_user_vaddr (vaddr) && pagedir_get_page (cur->pagedir, vaddr) != NULL);
+  return (is_user_vaddr (vaddr) && vaddr != NULL);
 }
 
 static bool
@@ -178,7 +178,7 @@ syscall_read (int fd, char *buffer, unsigned size)
 {
   struct process *cur = thread_current ()->process;
   int read = -1;
-  
+ 
   if (!validate_user_memory (buffer) ||
       !validate_user_memory (buffer + size - 1))
   {
