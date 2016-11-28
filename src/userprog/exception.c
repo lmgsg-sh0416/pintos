@@ -186,21 +186,7 @@ page_fault (struct intr_frame *f)
       thread_exit ();
     }
   // load segment
-  if (spte->type == PAGE_FILE || spte->type == PAGE_ZERO)
-    {
-      void *page = pg_round_down (fault_addr);
-      off_t diff = page - spte->upage;
-      off_t off = spte->file_offset + diff;
-      uint32_t read_bytes = spte->read_bytes>=diff ? spte->read_bytes-diff : 0;
-      read_bytes = read_bytes > PGSIZE ? PGSIZE : read_bytes;
-      if (!load_segment (cur->executable, off, page, read_bytes, spte->writable)) 
-        {
-          cur->process->exit_status = -1;
-          thread_exit ();
-        }
-    }
-  // need to implement swap
-  else
+  if (!load_segment (spte, fault_addr)) 
     {
       cur->process->exit_status = -1;
       thread_exit ();

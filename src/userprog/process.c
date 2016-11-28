@@ -499,22 +499,34 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
 static bool install_page (void *upage, void *kpage, bool writable);
 
-/* Loads a segment starting at offset OFS in FILE at address
-   UPAGE.  In total, READ_BYTES + ZERO_BYTES bytes of virtual
-   memory are initialized, as follows:
+/* load_segment() helpers. */
+static bool load_segment_from_file (struct file *file, off_t ofs, uint8_t *upage,
+              uint32_t read_bytes, bool writable);
 
-        - READ_BYTES bytes at UPAGE must be read from FILE
-          starting at offset OFS.
-
-        - ZERO_BYTES bytes at UPAGE + READ_BYTES must be zeroed.
-
-   The pages initialized by this function must be writable by the
-   user process if WRITABLE is true, read-only otherwise.
-
-   Return true if successful, false if a memory allocation error
-   or disk read error occurs. */
 bool
-load_segment (struct file *file, off_t ofs, uint8_t *upage,
+load_segment (struct page *spte, void *vaddr)
+{
+  struct thread *cur = thread_current ();
+  if (spte->type == PAGE_FILE || spte->type == PAGE_ZERO)
+    {
+      void *page = pg_round_down (vaddr);
+      off_t diff = page - spte->upage;
+      off_t off = spte->file_offset + diff;
+      uint32_t read_bytes = spte->read_bytes>=diff ? spte->read_bytes-diff : 0;
+      read_bytes = read_bytes > PGSIZE ? PGSIZE : read_bytes;
+      return load_segment_from_file (cur->executable, off, page, read_bytes, spte->writable);
+    }
+  // need to implement swap
+  else
+    {
+      return false;
+    }
+}
+
+
+/* Load from file just one page */
+static bool
+load_segment_from_file (struct file *file, off_t ofs, uint8_t *upage,
               uint32_t read_bytes, bool writable) 
 {
   struct thread *cur = thread_current ();

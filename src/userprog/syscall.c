@@ -44,18 +44,7 @@ validate_user_memory (struct intr_frame *f, const char *vaddr)
       if (spte->upage == PHYS_BASE-STACK_SIZE && vaddr < f->esp-128)  
         return false;
       // load segment
-      if (spte->type == PAGE_FILE || spte->type == PAGE_ZERO)
-        {
-          void *page = pg_round_down (vaddr);
-          off_t diff = page - spte->upage;
-          off_t off = spte->file_offset + diff;
-          uint32_t read_bytes = spte->read_bytes>=diff ? spte->read_bytes-diff : 0;
-          read_bytes = read_bytes > PGSIZE ? PGSIZE : read_bytes;
-          return load_segment (cur->executable, off, page, read_bytes, spte->writable);
-        }
-      // need to implement swap
-      else
-        return false;
+      return load_segment (spte, vaddr);
     }
   return true;
 }
