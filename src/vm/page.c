@@ -31,7 +31,7 @@ init_sup_pagedir (void)
 
 bool
 insert_page_entry (enum page_type type, void *start_vaddr, void *end_vaddr, void *upage,
-    off_t file_offset, uint32_t read_bytes, bool writable)
+                   struct file *file, off_t file_offset, uint32_t read_bytes, bool writable)
 {
   struct thread *cur = thread_current ();
   struct page *p = (struct page*) malloc (sizeof *p);
@@ -41,6 +41,7 @@ insert_page_entry (enum page_type type, void *start_vaddr, void *end_vaddr, void
   p->start_vaddr = start_vaddr;
   p->end_vaddr = end_vaddr;
   p->upage = upage;
+  p->file = file;
   p->file_offset = file_offset;
   p->read_bytes = read_bytes;
   p->writable = writable;

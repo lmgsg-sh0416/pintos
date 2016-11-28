@@ -76,6 +76,7 @@ process_execute (const char *file_name)
     p->is_child_dead = false;
     list_push_back (&(cur->child_process), &(p->elem));
     list_init (&p->fd_table);
+    list_init (&p->mf_table);
     intr_set_level (old_level);
     sema_up (&(cur->exec_sema2));
     /* Parent thread wait until success is updated */
@@ -248,7 +249,7 @@ process_exit (void)
 
   if (cur->executable != NULL)
     file_close (cur->executable);
-  
+
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -465,7 +466,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
                   read_bytes = 0;
                   type = PAGE_ZERO;
                 }
-              if (!insert_page_entry (type, start_vaddr, end_vaddr, upage, file_offset, read_bytes, writable))
+              if (!insert_page_entry (type, start_vaddr, end_vaddr, upage, file, file_offset, read_bytes, writable))
                 goto done;
             }
           else
@@ -474,6 +475,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
         }
     }
 
+  t->executable = file;
   /* Set up stack. */
   if (!setup_stack (esp))
     goto done;
@@ -486,11 +488,13 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* We arrive here whether the load is successful or not. */
   if (success)
     {
-      t->executable = file;
       file_deny_write (file);
     }
   else
-    file_close (file);
+    {
+      t->executable = NULL;
+      file_close (file);
+    }
   return success;
 }
 
@@ -514,7 +518,7 @@ load_segment (struct page *spte, void *vaddr)
       off_t off = spte->file_offset + diff;
       uint32_t read_bytes = spte->read_bytes>=diff ? spte->read_bytes-diff : 0;
       read_bytes = read_bytes > PGSIZE ? PGSIZE : read_bytes;
-      return load_segment_from_file (cur->executable, off, page, read_bytes, spte->writable);
+      return load_segment_from_file (spte->file, off, page, read_bytes, spte->writable);
     }
   // need to implement swap
   else
@@ -614,7 +618,7 @@ setup_stack (void **esp)
   bool success = false;
 
   kpage = insert_frame_entry (cur->pagedir, PHYS_BASE-PGSIZE, PAL_USER | PAL_ZERO);
-  if (!insert_page_entry (PAGE_ZERO, PHYS_BASE-STACK_SIZE, PHYS_BASE, PHYS_BASE-STACK_SIZE, 0, 0, true))
+  if (!insert_page_entry (PAGE_ZERO, PHYS_BASE-STACK_SIZE, PHYS_BASE, PHYS_BASE-STACK_SIZE, cur->executable, 0, 0, true))
     return success;
   
   if (kpage != NULL) 

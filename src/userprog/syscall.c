@@ -23,23 +23,20 @@ static bool
 validate_user_memory (struct intr_frame *f, const char *vaddr)
 {
   struct thread *cur = thread_current ();
-  struct hash_iterator i;
-  struct page *spte;
+  struct hash_elem *e;
+  struct page temp, *spte;
   if (!is_user_vaddr (vaddr))
     return false;
   if (pagedir_get_page (cur->pagedir, vaddr) == NULL) // page is unmapper
     {
       // find segment which contain vaddr
-      hash_first (&i, &(cur->sup_pagedir));
-      while (hash_next (&i))
-        {
-          spte = hash_entry (hash_cur (&i), struct page, elem);
-          if (spte->start_vaddr <= vaddr && vaddr < spte->end_vaddr)
-            break;
-        }
+      temp.upage = pg_round_down (vaddr);
+      e = hash_find (&cur->sup_pagedir, &temp.elem);
+
       // segment not found
-      if (hash_cur (&i) == NULL)  
+      if (e == NULL)  
         return false;
+      spte = hash_entry (e, struct page, elem);
       // segment is stack and vaddr is in red zone
       if (spte->upage == PHYS_BASE-STACK_SIZE && vaddr < f->esp-128)  
         return false;
@@ -55,6 +52,159 @@ fd_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
   struct file_desc *a_fd = list_entry (a, struct file_desc, elem);
   struct file_desc *b_fd = list_entry (b, struct file_desc, elem);
   return a_fd->num < b_fd->num;
+}
+
+static bool
+mf_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  struct map_file *a_mf = list_entry (a, struct map_file, elem);
+  struct map_file *b_mf = list_entry (b, struct map_file, elem);
+  return a_mf->mid < b_mf->mid;
+}
+
+static mapid_t
+syscall_mmap (int fd, void *addr)
+{
+  struct thread *cur = thread_current ();
+  struct list_elem *e;
+  void *upage = addr;
+
+  struct file_desc *fde;
+  struct map_file *mf;
+  int32_t num_pages;
+  off_t size_file;
+
+  if (!is_user_vaddr (addr))
+    {
+      return -1;
+    }
+
+  if (addr == 0 ||                      // addr 0 is unmappable
+      (uint32_t)addr % PGSIZE != 0 ||   // not page-aligned
+      fd <= 2)                          // stdin, stdout, stderr or other invalid fd number
+    {
+      return -1;
+    }
+
+  // fd table is empty - must fail
+  if (list_empty (&cur->process->fd_table))
+    return -1;
+
+  // file descriptor search
+  for (e = list_begin (&cur->process->fd_table); e != list_end (&cur->process->fd_table); e = list_next (e))
+    {
+      fde = list_entry (e, struct file_desc, elem);
+      if (fde->num == fd)
+        break;
+
+      if (list_next (e) == list_end (&cur->process->fd_table))
+        return -1;
+    }
+
+  size_file = file_length (fde->file);
+  num_pages = size_file / PGSIZE;
+  if (size_file % PGSIZE != 0)
+    num_pages++;
+
+  // check the file is mappable at the given address
+  while (num_pages > 0) 
+    {
+      if (pagedir_get_page (cur->pagedir, upage) != NULL)
+        {
+          return -1;
+        }
+
+      num_pages--;
+      upage += PGSIZE;
+    }
+  
+  // it's OK to insert
+  if (!insert_page_entry (PAGE_FILE, addr, addr + size_file, 
+                          addr, fde->file, 0, size_file, true))
+    {
+      return -1;
+    }
+
+  mf = malloc (sizeof *mf);
+  mf->file = fde->file;
+  mf->addr = addr;
+  mf->mid = -1;
+
+  // allocate map id
+  if (list_empty (&cur->process->mf_table)) 
+    {
+      mf->mid = 0;
+    }
+  else
+    {
+      int mid = 0;
+      for (e = list_begin (&cur->process->mf_table); e != list_end (&cur->process->mf_table); e = list_next (e))
+        {
+          struct map_file *mfe = list_entry (e, struct map_file, elem);
+          if (mid < mfe->mid)
+            {
+              mf->mid = mid;
+              break;
+            }
+
+          mid++;
+
+          if (list_next (e) == list_end (&cur->process->mf_table))
+            mf->mid = mid;
+        }
+    }
+
+  list_insert_ordered (&cur->process->mf_table, &mf->elem, mf_less, NULL);
+  return mf->mid;
+}
+
+static void
+syscall_munmap (mapid_t mapid)
+{
+  struct thread *cur = thread_current ();
+  struct map_file *mf;
+  struct list_elem *e;
+  struct file *reopened;
+
+  int32_t num_pages;
+  off_t size_file;
+  void *upage;
+  
+  for (e = list_begin (&cur->process->mf_table); e != list_end (&cur->process->mf_table); e = list_next (e))
+    {
+      mf = list_entry (e, struct map_file, elem);
+      if (mf->mid == mapid)
+        break;
+
+      if (list_next (e) == list_end (&cur->process->mf_table))
+        return;
+    }
+
+  reopened = file_reopen (mf->file);
+
+  upage = mf->addr;
+  size_file = file_length (reopened);
+  num_pages = size_file / PGSIZE;
+  if (size_file % PGSIZE != 0)
+    num_pages++;
+
+  while (num_pages > 0) 
+    {
+      if (pagedir_is_dirty (&cur->pagedir, upage))
+        {
+          off_t diff = upage - mf->addr;
+          uint32_t read_bytes = size_file >= diff ? size_file - diff : 0;
+          file_write_at (reopened, upage, read_bytes, diff);
+        }
+      pagedir_clear_page (&cur->pagedir, upage);
+
+      num_pages--;
+      upage += PGSIZE;
+    }
+
+  file_close (reopened);
+  list_remove (&mf->elem);
+  free (mf);
 }
 
 static void
@@ -114,8 +264,6 @@ syscall_remove (struct intr_frame *f, const char *name)
   }
 
   result = filesys_remove (name);
-
-  /* what if the file is opened? */
 
   return result;
 }
@@ -392,6 +540,7 @@ syscall_handler (struct intr_frame *f)
     // Two argument
     case SYS_CREATE:
     case SYS_SEEK:
+    case SYS_MMAP:
       if (!validate_user_memory (f, f->esp+8))
       {
         cur->process->exit_status = -1;
@@ -406,6 +555,7 @@ syscall_handler (struct intr_frame *f)
     case SYS_FILESIZE:
     case SYS_TELL:
     case SYS_CLOSE:
+    case SYS_MUNMAP:
       if (!validate_user_memory (f, f->esp+4))
       {
         cur->process->exit_status = -1;
@@ -454,6 +604,12 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_CLOSE:
       syscall_close (*((int *)(f->esp + 4)));
+      break;
+    case SYS_MMAP:
+      f->eax = syscall_mmap (*(int *)(f->esp + 4), *(void **)(f->esp + 8));
+      break;
+    case SYS_MUNMAP:
+      syscall_munmap (*(mapid_t *)(f->esp + 4));
       break;
     default:
       break;
