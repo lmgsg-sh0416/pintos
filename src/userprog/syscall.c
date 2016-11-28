@@ -20,10 +20,44 @@ syscall_init (void)
 }
 
 static bool
-validate_user_memory (void *vaddr)
+validate_user_memory (struct intr_frame *f, const char *vaddr)
 {
   struct thread *cur = thread_current ();
-  return (is_user_vaddr (vaddr) && vaddr != NULL);
+  struct hash_iterator i;
+  struct page *spte;
+  if (!is_user_vaddr (vaddr))
+    return false;
+  if (pagedir_get_page (cur->pagedir, vaddr) == NULL) // page is unmapper
+    {
+      // find segment which contain vaddr
+      hash_first (&i, &(cur->sup_pagedir));
+      while (hash_next (&i))
+        {
+          spte = hash_entry (hash_cur (&i), struct page, elem);
+          if (spte->start_vaddr <= vaddr && vaddr < spte->end_vaddr)
+            break;
+        }
+      // segment not found
+      if (hash_cur (&i) == NULL)  
+        return false;
+      // segment is stack and vaddr is in red zone
+      if (spte->upage == PHYS_BASE-STACK_SIZE && vaddr < f->esp-128)  
+        return false;
+      // load segment
+      if (spte->type == PAGE_FILE || spte->type == PAGE_ZERO)
+        {
+          void *page = pg_round_down (vaddr);
+          off_t diff = page - spte->upage;
+          off_t off = spte->file_offset + diff;
+          uint32_t read_bytes = spte->read_bytes>=diff ? spte->read_bytes-diff : 0;
+          read_bytes = read_bytes > PGSIZE ? PGSIZE : read_bytes;
+          return load_segment (cur->executable, off, page, read_bytes, spte->writable);
+        }
+      // need to implement swap
+      else
+        return false;
+    }
+  return true;
 }
 
 static bool
@@ -42,11 +76,11 @@ syscall_exit (int status)
 }
 
 static tid_t
-syscall_exec (const char *cmd_line)
+syscall_exec (struct intr_frame *f, const char *cmd_line)
 {
   struct thread *cur = thread_current ();
   tid_t result;
-  if (!validate_user_memory (cmd_line))
+  if (!validate_user_memory (f, cmd_line))
   {
     cur->process->exit_status = -1;
     thread_exit();
@@ -60,12 +94,12 @@ syscall_exec (const char *cmd_line)
 }
 
 static bool
-syscall_create (const char *name, int32_t size)
+syscall_create (struct intr_frame *f, const char *name, int32_t size)
 {
   struct thread *cur = thread_current ();
   bool result;
   
-  if (!validate_user_memory (name))
+  if (!validate_user_memory (f, name))
   {
     cur->process->exit_status = -1;
     thread_exit();
@@ -78,12 +112,12 @@ syscall_create (const char *name, int32_t size)
 }
 
 static bool
-syscall_remove (const char *name)
+syscall_remove (struct intr_frame *f, const char *name)
 {
   struct process *cur = thread_current ()->process;
   bool result;
   
-  if (!validate_user_memory (name))
+  if (!validate_user_memory (f, name))
   {
     cur->exit_status = -1;
     thread_exit();
@@ -98,12 +132,12 @@ syscall_remove (const char *name)
 }
 
 static int
-syscall_open (const char *name)
+syscall_open (struct intr_frame *f, const char *name)
 {
   struct process *cur = thread_current ()->process;
   struct file_desc *fd;
 
-  if (!validate_user_memory (name))
+  if (!validate_user_memory (f, name))
     {
       cur->exit_status = -1;
       thread_exit ();
@@ -174,13 +208,13 @@ syscall_close (int fd)
 }
 
 static int
-syscall_read (int fd, char *buffer, unsigned size)
+syscall_read (struct intr_frame *f, int fd, char *buffer, unsigned size)
 {
   struct process *cur = thread_current ()->process;
   int read = -1;
  
-  if (!validate_user_memory (buffer) ||
-      !validate_user_memory (buffer + size - 1))
+  if (!validate_user_memory (f, buffer) ||
+      !validate_user_memory (f, buffer + size - 1))
   {
     cur->exit_status = -1;
     thread_exit();
@@ -213,13 +247,13 @@ syscall_read (int fd, char *buffer, unsigned size)
 }
 
 static int
-syscall_write (int fd, const char *buffer, unsigned size)
+syscall_write (struct intr_frame *f, int fd, const char *buffer, unsigned size)
 {
   struct process *cur = thread_current ()->process;
   int written = -1;
   
-  if (!validate_user_memory (buffer) ||
-      !validate_user_memory (buffer + size - 1))
+  if (!validate_user_memory (f, buffer) ||
+      !validate_user_memory (f, buffer + size - 1))
   {
     cur->exit_status = -1;
     thread_exit();
@@ -230,7 +264,7 @@ syscall_write (int fd, const char *buffer, unsigned size)
       int remaining = size;
       while (remaining > 0)
         {
-          if (!validate_user_memory (buffer + (remaining - size)))
+          if (!validate_user_memory (f, buffer + (remaining - size)))
             {
               cur->exit_status = -1;
               thread_exit ();
@@ -347,7 +381,7 @@ syscall_handler (struct intr_frame *f)
   
   ASSERT (cur->process != NULL);
 
-  if (!validate_user_memory (f->esp))
+  if (!validate_user_memory (f, f->esp))
   {
     cur->process->exit_status = -1;
     thread_exit();
@@ -361,7 +395,7 @@ syscall_handler (struct intr_frame *f)
     // Three argument
     case SYS_READ:
     case SYS_WRITE:
-      if (!validate_user_memory (f->esp+12))
+      if (!validate_user_memory (f, f->esp+12))
       {
         cur->process->exit_status = -1;
         thread_exit();
@@ -369,7 +403,7 @@ syscall_handler (struct intr_frame *f)
     // Two argument
     case SYS_CREATE:
     case SYS_SEEK:
-      if (!validate_user_memory (f->esp+8))
+      if (!validate_user_memory (f, f->esp+8))
       {
         cur->process->exit_status = -1;
         thread_exit();
@@ -383,7 +417,7 @@ syscall_handler (struct intr_frame *f)
     case SYS_FILESIZE:
     case SYS_TELL:
     case SYS_CLOSE:
-      if (!validate_user_memory (f->esp+4))
+      if (!validate_user_memory (f, f->esp+4))
       {
         cur->process->exit_status = -1;
         thread_exit();
@@ -400,28 +434,28 @@ syscall_handler (struct intr_frame *f)
       syscall_exit (*((int *)(f->esp+4)));
       break;
     case SYS_EXEC:
-      f->eax = syscall_exec (*((char **)(f->esp+4)));
+      f->eax = syscall_exec (f, *((char **)(f->esp+4)));
       break;
     case SYS_WAIT:
       f->eax = process_wait (*((tid_t *)(f->esp+4)));
       break;
     case SYS_CREATE:
-      f->eax = syscall_create (*((char **)(f->esp + 4)), *((unsigned *)(f->esp + 8)));
+      f->eax = syscall_create (f, *((char **)(f->esp + 4)), *((unsigned *)(f->esp + 8)));
       break;
     case SYS_REMOVE:
-      f->eax = syscall_remove (*(char **)(f->esp + 4));
+      f->eax = syscall_remove (f, *(char **)(f->esp + 4));
       break;
     case SYS_OPEN:
-      f->eax = syscall_open (*(char **)(f->esp + 4));
+      f->eax = syscall_open (f, *(char **)(f->esp + 4));
       break;
     case SYS_FILESIZE:
       f->eax = syscall_filesize (*((int *)(f->esp + 4)));
       break;
     case SYS_READ:
-      f->eax = syscall_read (*((int *)(f->esp + 4)), *((char **)(f->esp + 8)), *((int *)(f->esp + 12)));
+      f->eax = syscall_read (f, *((int *)(f->esp + 4)), *((char **)(f->esp + 8)), *((int *)(f->esp + 12)));
       break;
     case SYS_WRITE:
-      f->eax = syscall_write (*((int *)(f->esp + 4)), *((char **)(f->esp + 8)), *((int *)(f->esp + 12)));
+      f->eax = syscall_write (f, *((int *)(f->esp + 4)), *((char **)(f->esp + 8)), *((int *)(f->esp + 12)));
       break;
     case SYS_SEEK:
       syscall_seek (*((int *)(f->esp + 4)), *((unsigned *)(f->esp + 8)));

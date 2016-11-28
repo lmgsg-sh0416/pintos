@@ -2,7 +2,7 @@
 #define USERPROG_PROCESS_H
 
 #include "threads/thread.h"
-
+#define STACK_SIZE (1<<23)
 struct file_desc
   {
     int num;

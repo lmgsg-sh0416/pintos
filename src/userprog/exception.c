@@ -157,9 +157,9 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  /* To implement virtual memory, delete the rest of the function
-     body, and replace it with code that brings in the page to
-     which fault_addr refers. */
+  /* Implement virtual memory, if fault_addr is valid then
+     brings page which fault_addr refers. */
+  // find segment
   hash_first (&i, &(cur->sup_pagedir));
   while (hash_next (&i))
     {
@@ -167,11 +167,25 @@ page_fault (struct intr_frame *f)
       if (spte->start_vaddr <= fault_addr && fault_addr < spte->end_vaddr)
         break;
     }
-  if (hash_cur (&i) == NULL) {
-    cur->process->exit_status = -1;
-    thread_exit ();
-  }
-
+  // segment not found
+  if (hash_cur (&i) == NULL) 
+    {
+      cur->process->exit_status = -1;
+      thread_exit ();
+    }
+  // segment is stack and fault_addr is in red zone
+  if (spte->upage == PHYS_BASE-STACK_SIZE && fault_addr < f->esp-128) 
+    {
+      cur->process->exit_status = -1;
+      thread_exit ();
+    }
+  // segment is readonly but do write
+  if (spte->writable == false && write == true)
+    {
+      cur->process->exit_status = -1;
+      thread_exit ();
+    }
+  // load segment
   if (spte->type == PAGE_FILE || spte->type == PAGE_ZERO)
     {
       void *page = pg_round_down (fault_addr);
@@ -179,29 +193,17 @@ page_fault (struct intr_frame *f)
       off_t off = spte->file_offset + diff;
       uint32_t read_bytes = spte->read_bytes>=diff ? spte->read_bytes-diff : 0;
       read_bytes = read_bytes > PGSIZE ? PGSIZE : read_bytes;
-//      printf("page: %x, spte->upage: %x\n", page, spte->upage);
-//      printf("diff: %d\n", diff);
-//      printf("off: %d\n", off);
-//      printf("spte->read_bytes: %d\n", spte->read_bytes);
-//      printf("read_bytes: %d\n", read_bytes);
-      if (!load_segment (cur->executable, off, page, read_bytes, spte->writable)) {
-        cur->process->exit_status = -1;
-        thread_exit ();
-      }
+      if (!load_segment (cur->executable, off, page, read_bytes, spte->writable)) 
+        {
+          cur->process->exit_status = -1;
+          thread_exit ();
+        }
     }
-  else if (spte->type == PAGE_SWAP)
+  // need to implement swap
+  else
     {
       cur->process->exit_status = -1;
       thread_exit ();
-    }
-  else
-    {
-      printf ("Page fault at %p: %s error %s page in %s context.\n",
-              fault_addr,
-              not_present ? "not present" : "rights violation",
-              write ? "writing" : "reading",
-              user ? "user" : "kernel");
-      kill (f);
     }
 }
 

@@ -602,7 +602,7 @@ setup_stack (void **esp)
   bool success = false;
 
   kpage = insert_frame_entry (cur->pagedir, PHYS_BASE-PGSIZE, PAL_USER | PAL_ZERO);
-  if (!insert_page_entry (PAGE_ZERO, PHYS_BASE-PGSIZE, PHYS_BASE, PHYS_BASE-PGSIZE, 0, 0, true))
+  if (!insert_page_entry (PAGE_ZERO, PHYS_BASE-STACK_SIZE, PHYS_BASE, PHYS_BASE-STACK_SIZE, 0, 0, true))
     return success;
   
   if (kpage != NULL) 
