@@ -1,6 +1,7 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include <user/syscall.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/malloc.h"
@@ -11,6 +12,7 @@
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "vm/frame.h"
+#include "vm/page.h"
 
 static void syscall_handler (struct intr_frame *);
 
@@ -62,6 +64,168 @@ fd_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
   struct file_desc *a_fd = list_entry (a, struct file_desc, elem);
   struct file_desc *b_fd = list_entry (b, struct file_desc, elem);
   return a_fd->num < b_fd->num;
+}
+
+static bool
+mf_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  struct mmap_file *a_mf = list_entry (a, struct mmap_file, elem);
+  struct mmap_file *b_mf = list_entry (b, struct mmap_file, elem);
+  return a_mf->mid < b_mf->mid;
+}
+
+static mapid_t
+syscall_mmap (struct intr_frame *f, int fd, void *addr)
+{
+  struct thread *cur = thread_current ();
+  struct file_desc *fde;
+  struct mmap_file *mf;
+  struct list_elem *e;
+  size_t page_num;
+
+  uint32_t filesz = (uint32_t)addr % PGSIZE;
+  void *upage = addr;
+
+  if (addr == 0 || // address is 0
+      filesz != 0 || // address is not page-aligned
+      fd <= 2)     // given fd is stdin, stdout or stderr
+    {
+      return -1;
+    }
+
+  if (!is_user_vaddr (addr))
+    {
+      return -1;
+    }
+  pin_frame (cur->pagedir, addr);
+
+  for (e = list_begin (&cur->process->fd_table);
+       e != list_end (&cur->process->fd_table);
+       e = list_next (e))
+    {
+      fde = list_entry (e, struct file_desc, elem);
+      if (fde->num == fd)
+        break;
+
+      if (list_next (e) == list_end (&cur->process->fd_table))
+        return -1;
+    }
+
+  filesz = file_length (fde->file);
+  while (upage < addr + filesz)
+    {
+      if (pagedir_get_page (cur->pagedir, upage) != NULL)
+        {
+          return -1;
+        }
+
+      upage += PGSIZE;
+    }
+  
+  mf = malloc (sizeof *mf);
+  mf->mid = -1;
+  mf->addr = addr;
+//  mf->file = fde->file;
+
+  if (list_empty (&cur->process->file_mapped))
+    mf->mid = 0;
+  else
+    {
+      int mid = 0;
+      for (e = list_begin (&cur->process->file_mapped);
+           e != list_end (&cur->process->file_mapped);
+           e = list_next (e))
+        {
+          struct mmap_file *mfe = list_entry (e, struct mmap_file, elem);
+          if (mid < mfe->mid)
+            {
+              mf->mid = mid;
+              break;
+            }
+    
+          mid++;
+    
+          if (list_next (e) == list_end (&cur->process->file_mapped))
+            mf->mid = mid;
+        }
+    }
+
+  page_num = (pg_round_down (addr + filesz) - pg_round_down (addr)) / PGSIZE + 1;
+  if (!insert_page_entry (page_num, addr, addr + filesz, addr, fde->file, 0, filesz, true))
+    {
+      free (mf);
+      return -1;
+    }
+
+  list_insert_ordered (&cur->process->file_mapped, &mf->elem, mf_less, NULL);
+  unpin_frame (cur->pagedir, addr);
+  return mf->mid;
+}
+
+static void
+syscall_munmap (mapid_t mapid)
+{
+  struct thread *cur = thread_current ();
+  struct mmap_file *mf;
+  struct list_elem *e;
+
+  struct hash_iterator i;
+  struct page *spte;
+
+  void *upage;
+  off_t offset;
+  off_t file_size;
+  struct file *reopened;
+
+  for (e = list_begin (&cur->process->file_mapped);
+       e != list_end (&cur->process->file_mapped);
+       e = list_next (e))
+    {
+      mf = list_entry (e, struct mmap_file, elem);
+      if (mf->mid == mapid)
+        break;
+
+      if (list_next (e) == list_end (&cur->process->file_mapped))
+        return;
+    }
+
+  hash_first (&i, &(cur->sup_pagedir));
+  while (hash_next (&i))
+    {
+      spte = hash_entry (hash_cur (&i), struct page, elem);
+      if (spte->start_vaddr <= mf->addr && mf->addr < spte->end_vaddr)
+      {
+        break;
+      }
+    }
+
+  if (hash_cur (&i) == NULL)
+    return;
+
+  reopened = file_reopen (spte->file);
+  file_size = file_length (reopened);
+
+  offset = 0;
+  upage = mf->addr;
+  while (upage < mf->addr + file_size)
+    {
+      off_t write_bytes = (file_size - offset) >= PGSIZE ? PGSIZE : file_size - offset;
+      if (pagedir_is_dirty (cur->pagedir, upage))
+        {
+          file_write_at (reopened, upage, write_bytes, offset);
+        }
+
+      pagedir_clear_page (cur->pagedir, upage);
+
+      upage += PGSIZE;
+      offset += PGSIZE;
+    }
+
+  hash_delete (&cur->sup_pagedir, &spte->elem);
+  free (spte);
+  file_close (reopened);
+  list_remove (&mf->elem);
+  free (mf);
 }
 
 static void
@@ -424,6 +588,7 @@ syscall_handler (struct intr_frame *f)
     // Two argument
     case SYS_CREATE:
     case SYS_SEEK:
+    case SYS_MMAP:
       if (!validate_user_memory (f, f->esp+8, false))
       {
         cur->process->exit_status = -1;
@@ -438,6 +603,7 @@ syscall_handler (struct intr_frame *f)
     case SYS_FILESIZE:
     case SYS_TELL:
     case SYS_CLOSE:
+    case SYS_MUNMAP:
       if (!validate_user_memory (f, f->esp+4, false))
       {
         cur->process->exit_status = -1;
@@ -503,6 +669,15 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_CLOSE:
       syscall_close (*((int *)(f->esp + 4)));
+      unpin_frame (cur->pagedir, f->esp+4);
+      break;
+    case SYS_MMAP:
+      f->eax = syscall_mmap (f, *(int *)(f->esp + 4), *(void **)(f->esp + 8));
+      unpin_frame (cur->pagedir, f->esp+4);
+      unpin_frame (cur->pagedir, f->esp+8);
+      break;
+    case SYS_MUNMAP:
+      syscall_munmap (*(mapid_t *)(f->esp + 4));
       unpin_frame (cur->pagedir, f->esp+4);
       break;
     default:

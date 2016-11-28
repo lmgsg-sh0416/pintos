@@ -3,10 +3,19 @@
 
 #include "threads/thread.h"
 #define STACK_SIZE (1<<23)
+
 struct file_desc
   {
     int num;
     struct file *file;
+    struct list_elem elem;
+  };
+
+struct mmap_file
+  {
+    int mid;
+    void *addr;
+    //struct file *file;
     struct list_elem elem;
   };
 
@@ -20,6 +29,7 @@ struct process
     bool is_parent_dead;            /* is parent dead? */
     bool is_child_dead;             /* is child dead? */
     struct list fd_table;
+    struct list file_mapped;
   };
 
 tid_t process_execute (const char *file_name);

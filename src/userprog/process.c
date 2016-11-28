@@ -77,6 +77,7 @@ process_execute (const char *file_name)
     p->is_child_dead = false;
     list_push_back (&(cur->child_process), &(p->elem));
     list_init (&p->fd_table);
+    list_init (&p->file_mapped);
     intr_set_level (old_level);
     sema_up (&(cur->exec_sema2));
     /* Parent thread wait until success is updated */
@@ -466,7 +467,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
                      Don't read anything from disk. */
                   read_bytes = 0;
                 }
-              if (!insert_page_entry (page_num, start_vaddr, end_vaddr, upage, file_offset, read_bytes, writable))
+              if (!insert_page_entry (page_num, start_vaddr, end_vaddr, upage, file, file_offset, read_bytes, writable))
                 goto done;
             }
           else
@@ -475,6 +476,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
         }
     }
 
+  t->executable = file;
   /* Set up stack. */
   if (!setup_stack (esp))
     goto done;
@@ -487,11 +489,13 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* We arrive here whether the load is successful or not. */
   if (success)
     {
-      t->executable = file;
       file_deny_write (file);
     }
   else
-    file_close (file);
+    {
+      t->executable = NULL;
+      file_close (file);
+    }
   return success;
 }
 
@@ -527,7 +531,7 @@ load_segment (struct page *spte, void *vaddr)
       off_t off = spte->file_offset + diff;
       uint32_t read_bytes = spte->read_bytes>=diff ? spte->read_bytes-diff : 0;
       read_bytes = read_bytes > PGSIZE ? PGSIZE : read_bytes;
-      if (!load_segment_from_file (cur->executable, off, page, read_bytes, spte->writable))
+      if (!load_segment_from_file (spte->file, off, page, read_bytes, spte->writable))
         {
           lock_release (&load_lock);
           return false;
@@ -667,7 +671,7 @@ setup_stack (void **esp)
 
   lock_acquire (&load_lock);
   kpage = insert_frame_entry (cur->pagedir, PHYS_BASE-PGSIZE, PAL_USER | PAL_ZERO);
-  if (!insert_page_entry (STACK_SIZE/PGSIZE, PHYS_BASE-STACK_SIZE, PHYS_BASE, PHYS_BASE-STACK_SIZE, 0, 0, true))
+  if (!insert_page_entry (STACK_SIZE/PGSIZE, PHYS_BASE-STACK_SIZE, PHYS_BASE, PHYS_BASE-STACK_SIZE, cur->executable, 0, 0, true))
     {
       lock_release (&load_lock);
       return success;
