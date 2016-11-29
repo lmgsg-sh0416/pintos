@@ -42,15 +42,19 @@ validate_user_memory (struct intr_frame *f, const char *vaddr, bool writable)
     }
   // segment not found
   if (hash_cur (&i) == NULL)  
+    {
+      return false;
+    }
+  // segment is stack and vaddr is in red zone
+  if (spte->upage == PHYS_BASE-STACK_SIZE && vaddr < f->esp-128)
   {
     return false;
   }
-  // segment is stack and vaddr is in red zone
-  if (spte->upage == PHYS_BASE-STACK_SIZE && vaddr < f->esp-128)  
-    return false;
   // writable check
   if (writable == true && spte->writable == false)
+  {
     return false;
+  }
   // everything is ok, so go and get and pin user page
   pin_frame (cur->pagedir, vaddr);
   if (pagedir_get_page (cur->pagedir, vaddr) == NULL) // page is unmapper
@@ -78,16 +82,20 @@ static mapid_t
 syscall_mmap (struct intr_frame *f, int fd, void *addr)
 {
   struct thread *cur = thread_current ();
+  struct hash_iterator i;
+  struct page *spte;
+  
   struct file_desc *fde;
+
   struct mmap_file *mf;
   struct list_elem *e;
+  
   size_t page_num;
-
-  uint32_t filesz = (uint32_t)addr % PGSIZE;
+  uint32_t file_size;
   void *upage = addr;
 
   if (addr == 0 || // address is 0
-      filesz != 0 || // address is not page-aligned
+      (uint32_t)addr % PGSIZE != 0 || // address is not page-aligned
       fd <= 2)     // given fd is stdin, stdout or stderr
     {
       return -1;
@@ -97,7 +105,6 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
     {
       return -1;
     }
-  pin_frame (cur->pagedir, addr);
 
   for (e = list_begin (&cur->process->fd_table);
        e != list_end (&cur->process->fd_table);
@@ -107,25 +114,44 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
       if (fde->num == fd)
         break;
 
-      if (list_next (e) == list_end (&cur->process->fd_table))
+      if (list_next (e) == list_end (&cur->process->fd_table)){
         return -1;
+      }
     }
 
-  filesz = file_length (fde->file);
-  while (upage < addr + filesz)
+  file_size = file_length (fde->file);
+
+  while (upage < addr + file_size)
     {
-      if (pagedir_get_page (cur->pagedir, upage) != NULL)
-        {
-          return -1;
-        }
+      if (pagedir_get_page (cur->pagedir, upage) != NULL) 
+        return -1;
 
       upage += PGSIZE;
     }
-  
+
+  if (!is_user_vaddr (addr+file_size-1))
+    {
+      return -1;
+    }
+
   mf = malloc (sizeof *mf);
   mf->mid = -1;
-  mf->addr = addr;
-//  mf->file = fde->file;
+  mf->file = file_reopen (fde->file);
+  mf->start_addr = addr;
+  mf->end_addr = addr + file_size;
+
+  // check overlap
+  hash_first (&i, &(cur->sup_pagedir));
+  while (hash_next(&i))
+    {
+      spte = hash_entry (hash_cur (&i), struct page, elem);
+      if ((spte->start_vaddr < mf->start_addr && spte->end_vaddr > mf->start_addr) ||
+          (spte->start_vaddr >= mf->start_addr && spte->start_vaddr < mf->end_addr))
+        {
+          free (mf);
+          return -1;
+       }
+    }
 
   if (list_empty (&cur->process->file_mapped))
     mf->mid = 0;
@@ -150,32 +176,30 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
         }
     }
 
-  page_num = (pg_round_down (addr + filesz) - pg_round_down (addr)) / PGSIZE + 1;
-  if (!insert_page_entry (page_num, addr, addr + filesz, addr, fde->file, 0, filesz, true))
+  page_num = (pg_round_down (addr + file_size) - pg_round_down (addr)) / PGSIZE + 1;
+  if (!insert_page_entry (page_num, mf->start_addr, mf->end_addr, mf->start_addr,
+                          mf->file, 0, file_size, true))
     {
       free (mf);
       return -1;
     }
 
   list_insert_ordered (&cur->process->file_mapped, &mf->elem, mf_less, NULL);
-  unpin_frame (cur->pagedir, addr);
   return mf->mid;
 }
 
 static void
-syscall_munmap (mapid_t mapid)
+syscall_munmap (struct intr_frame *f, mapid_t mapid)
 {
   struct thread *cur = thread_current ();
   struct mmap_file *mf;
   struct list_elem *e;
 
-  struct hash_iterator i;
-  struct page *spte;
+  struct page temp, *spte;
 
   void *upage;
   off_t offset;
   off_t file_size;
-  struct file *reopened;
 
   for (e = list_begin (&cur->process->file_mapped);
        e != list_end (&cur->process->file_mapped);
@@ -189,41 +213,37 @@ syscall_munmap (mapid_t mapid)
         return;
     }
 
-  hash_first (&i, &(cur->sup_pagedir));
-  while (hash_next (&i))
-    {
-      spte = hash_entry (hash_cur (&i), struct page, elem);
-      if (spte->start_vaddr <= mf->addr && mf->addr < spte->end_vaddr)
-      {
-        break;
-      }
-    }
+  temp.upage = mf->start_addr;
+  spte = hash_entry (hash_find (&cur->sup_pagedir, &temp.elem), struct page, elem);
 
-  if (hash_cur (&i) == NULL)
-    return;
-
-  reopened = file_reopen (spte->file);
-  file_size = file_length (reopened);
+  file_size = file_length (mf->file);
 
   offset = 0;
-  upage = mf->addr;
-  while (upage < mf->addr + file_size)
+  upage = mf->start_addr;
+  while (upage < mf->end_addr)
     {
       off_t write_bytes = (file_size - offset) >= PGSIZE ? PGSIZE : file_size - offset;
-      if (pagedir_is_dirty (cur->pagedir, upage))
+      if (!validate_user_memory (f, upage, true))
         {
-          file_write_at (reopened, upage, write_bytes, offset);
+          return;
         }
 
-      pagedir_clear_page (cur->pagedir, upage);
+      if (pagedir_is_dirty (cur->pagedir, upage))
+        {
+          file_write_at (mf->file, upage, write_bytes, offset);
+        }
 
+      remove_frame_entry (cur->pagedir, upage);
+      pagedir_clear_page (cur->pagedir, upage);
       upage += PGSIZE;
       offset += PGSIZE;
+      unpin_frame (cur->pagedir, upage);
     }
 
   hash_delete (&cur->sup_pagedir, &spte->elem);
   free (spte);
-  file_close (reopened);
+
+  file_close (mf->file);
   list_remove (&mf->elem);
   free (mf);
 }
@@ -286,6 +306,8 @@ syscall_remove (struct intr_frame *f, const char *name)
   }
 
   result = filesys_remove (name);
+
+
 
   /* what if the file is opened? */
   unpin_frame (thread_current ()->pagedir, name);
@@ -376,14 +398,14 @@ syscall_read (struct intr_frame *f, int fd, char *buffer, unsigned size)
   int i = 0;
   while (i < size)
   {
-    if (!validate_user_memory (f, buffer+i, false))
+    if (!validate_user_memory (f, buffer+i, true))
       {
         cur->exit_status = -1;
         thread_exit();
       }
     i += PGSIZE;
   }
-  if (!validate_user_memory (f, buffer+size-1, false))
+  if (!validate_user_memory (f, buffer+size-1, true))
     {
       cur->exit_status = -1;
       thread_exit();
@@ -431,14 +453,14 @@ syscall_write (struct intr_frame *f, int fd, const char *buffer, unsigned size)
   int i = 0;
   while (i < size)
   {
-    if (!validate_user_memory (f, buffer+i, true))
+    if (!validate_user_memory (f, buffer+i, false))
       {
         cur->exit_status = -1;
         thread_exit();
       }
     i += PGSIZE;
   }
-  if (!validate_user_memory (f, buffer+size-1, true))
+  if (!validate_user_memory (f, buffer+size-1, false))
     {
       cur->exit_status = -1;
       thread_exit();
@@ -677,7 +699,7 @@ syscall_handler (struct intr_frame *f)
       unpin_frame (cur->pagedir, f->esp+8);
       break;
     case SYS_MUNMAP:
-      syscall_munmap (*(mapid_t *)(f->esp + 4));
+      syscall_munmap (f, *(mapid_t *)(f->esp + 4));
       unpin_frame (cur->pagedir, f->esp+4);
       break;
     default:

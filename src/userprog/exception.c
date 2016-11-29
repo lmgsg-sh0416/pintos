@@ -194,7 +194,6 @@ page_fault (struct intr_frame *f)
       write ? "writing" : "reading",
       user ? "user" : "kernel", page_fault_cnt);
       */
-
       cur->process->exit_status = -1;
       thread_exit ();
     }

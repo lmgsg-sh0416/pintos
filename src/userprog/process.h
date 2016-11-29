@@ -14,8 +14,9 @@ struct file_desc
 struct mmap_file
   {
     int mid;
-    void *addr;
-    //struct file *file;
+    struct file *file;
+    void *start_addr;
+    void *end_addr;
     struct list_elem elem;
   };
 

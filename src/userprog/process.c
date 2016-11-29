@@ -8,6 +8,7 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
+#include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -236,6 +237,48 @@ process_exit (void)
     {
       printf ("%s: exit(%d)\n", cur->name, cur->process->exit_status);
       
+      if (!list_empty (&cur->process->file_mapped))
+        {
+          struct mmap_file *mf;
+          void *upage;
+          off_t offset, file_size;
+          struct page temp, *spte;
+          for (e = list_begin (&cur->process->file_mapped); e != list_end (&cur->process->file_mapped); )
+            {
+              mf = list_entry (e, struct mmap_file, elem);
+              e = list_next (e);
+              // find segment
+              temp.upage = mf->start_addr;
+              spte = hash_entry (hash_find (&cur->sup_pagedir, &temp.elem), struct page, elem);
+              file_size = file_length (mf->file);
+
+              offset = 0;
+              upage = mf->start_addr;
+              while (upage < mf->end_addr)
+                {
+                  off_t write_bytes = (file_size - offset) >= PGSIZE ? PGSIZE : file_size - offset;
+                  pin_frame (cur->pagedir, upage);
+                  if (pagedir_get_page (cur->pagedir, upage) == NULL) // page is unmapper
+                    load_segment (spte, upage);
+                  if (pagedir_is_dirty (cur->pagedir, upage))
+                    file_write_at (mf->file, upage, write_bytes, offset);
+
+                  remove_frame_entry (cur->pagedir, upage);
+                  pagedir_clear_page (cur->pagedir, upage);
+                  upage += PGSIZE;
+                  offset += PGSIZE;
+                  
+                }
+
+              hash_delete (&cur->sup_pagedir, &spte->elem);
+              free (spte);
+
+              file_close (mf->file);
+              list_remove (&mf->elem);
+              free (mf);
+            }
+        }
+
       if (!list_empty (&cur->process->fd_table))
         {
           struct file_desc *fde;
