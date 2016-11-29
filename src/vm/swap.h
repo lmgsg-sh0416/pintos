@@ -16,7 +16,7 @@ struct swap_entry
 
 void init_swap_table (void);
 void free_swap_slot_by_address (uint32_t *pd, void *upage, void *frame);  /* when reload */
-void free_swap_slot_by_pd (uint32_t *pd);                   /* when terminate */
+void free_swap_slot_by_pd (uint32_t *pd);                                 /* when terminate */
 bool allocate_swap_slot (uint32_t *pd, void *upage, void *frame);         /* when evict */
 
 #endif /* vm/swap.h */

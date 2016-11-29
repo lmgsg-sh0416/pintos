@@ -27,5 +27,6 @@ int process_wait (tid_t);
 void process_exit (void);
 void process_activate (void);
 bool load_segment (struct page *spte, void *vaddr);
+void init_load_lock ();
 
 #endif /* userprog/process.h */

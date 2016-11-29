@@ -63,10 +63,10 @@ free_swap_slot_by_pd (uint32_t *pd)
   struct swap_entry *s;
   lock_acquire (&swap_lock);
   // find swap slot
-  for (e = list_begin (&swap_table); e != list_end (&swap_table);
-       e = list_next (e))
+  for (e = list_begin (&swap_table); e != list_end (&swap_table);)
     {
       s = list_entry (e, struct swap_entry, elem);
+      e = list_next (e);
       if (s->pd == pd)
         {
           // unmark bitmap
@@ -89,11 +89,12 @@ allocate_swap_slot (uint32_t *pd, void *upage, void *frame)
   // find swap sector
   swap_bitmap_size = bitmap_size (swap_bitmap);
   for (i=0; i<swap_bitmap_size; i++)
-    if (bitmap_test (swap_bitmap, i))
+    if (bitmap_test (swap_bitmap, i) == false)
       break;
   // case: no swap sector
   if (i==swap_bitmap_size)
     {
+      printf("no nononon\n");
       lock_release (&swap_lock);
       return false;
     }

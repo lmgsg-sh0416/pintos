@@ -11,7 +11,7 @@ struct frame_entry
     void *frame;              /* kernel virtual address */
     uint32_t *pd;             /* page directory */
     void *upage;              /* uaddr */
-    struct lock lock;         /* Mutual exclusion */
+    int pinned;               /* pin system */
     struct list_elem elem;
   };
 

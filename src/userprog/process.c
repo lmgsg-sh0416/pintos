@@ -19,6 +19,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "vm/page.h"
+#include "vm/swap.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -143,6 +144,7 @@ start_process (void *file_name_)
     *(esp_int--) = (uint32_t*)esp_int+1;
     *(esp_int--) = num; 
     if_.esp = (void*)esp_int;
+    unpin_frame (cur->pagedir, PHYS_BASE-PGSIZE);
   }
 
   /* Find child process */
@@ -261,6 +263,7 @@ process_exit (void)
          directory before destroying the process's page
          directory, or our active page directory will be one
          that's been freed (and cleared). */
+      free_swap_slot_by_pd (cur->pagedir);
       cur->pagedir = NULL;
       pagedir_activate (NULL);
       pagedir_destroy (pd);
@@ -441,13 +444,13 @@ load (const char *file_name, void (**eip) (void), void **esp)
         case PT_LOAD:
           if (validate_segment (&phdr, file)) 
             {
-              enum page_type type;
               uint32_t start_vaddr = phdr.p_vaddr;
               uint32_t end_vaddr = start_vaddr + phdr.p_memsz;
               void *upage = start_vaddr & ~PGMASK;
               off_t file_offset = phdr.p_offset & ~PGMASK;
               uint32_t read_bytes;
               bool writable = (phdr.p_flags & PF_W) != 0;
+              size_t page_num = (pg_round_down (end_vaddr) - pg_round_down (start_vaddr))/PGSIZE + 1;
 
               uint32_t page_offset = phdr.p_vaddr & PGMASK;
               
@@ -456,16 +459,14 @@ load (const char *file_name, void (**eip) (void), void **esp)
                   /* Normal segment.
                      Read initial part from disk and zero the rest. */
                   read_bytes = page_offset + phdr.p_filesz;
-                  type = PAGE_FILE;
                 }
               else 
                 {
                   /* Entirely zero.
                      Don't read anything from disk. */
                   read_bytes = 0;
-                  type = PAGE_ZERO;
                 }
-              if (!insert_page_entry (type, start_vaddr, end_vaddr, upage, file_offset, read_bytes, writable))
+              if (!insert_page_entry (page_num, start_vaddr, end_vaddr, upage, file_offset, read_bytes, writable))
                 goto done;
             }
           else
@@ -502,25 +503,48 @@ static bool install_page (void *upage, void *kpage, bool writable);
 /* load_segment() helpers. */
 static bool load_segment_from_file (struct file *file, off_t ofs, uint8_t *upage,
               uint32_t read_bytes, bool writable);
+static bool load_segment_from_swap (uint8_t *upage, bool writable);
+
+static struct lock load_lock;
+
+void 
+init_load_lock (void)
+{
+  lock_init (&load_lock);
+}
 
 bool
 load_segment (struct page *spte, void *vaddr)
 {
   struct thread *cur = thread_current ();
-  if (spte->type == PAGE_FILE || spte->type == PAGE_ZERO)
+  void *page = pg_round_down (vaddr);
+  off_t diff = page - spte->upage;
+  
+  lock_acquire (&load_lock);
+  /* Load from file */
+  if (bitmap_test (spte->first_load, diff/PGSIZE) == false)
     {
-      void *page = pg_round_down (vaddr);
-      off_t diff = page - spte->upage;
       off_t off = spte->file_offset + diff;
       uint32_t read_bytes = spte->read_bytes>=diff ? spte->read_bytes-diff : 0;
       read_bytes = read_bytes > PGSIZE ? PGSIZE : read_bytes;
-      return load_segment_from_file (cur->executable, off, page, read_bytes, spte->writable);
+      if (!load_segment_from_file (cur->executable, off, page, read_bytes, spte->writable))
+        {
+          lock_release (&load_lock);
+          return false;
+        }
+      bitmap_set (spte->first_load, diff/PGSIZE, true);
     }
-  // need to implement swap
+  /* Load from swap */
   else
     {
-      return false;
+      if (!load_segment_from_swap (page, spte->writable))
+        {
+          lock_release (&load_lock);
+          return false;
+        }
     }
+  lock_release (&load_lock);
+  return true;
 }
 
 
@@ -537,7 +561,7 @@ load_segment_from_file (struct file *file, off_t ofs, uint8_t *upage,
   file_seek (file, ofs);
 
   /* Get a page of memory. */
-  uint8_t *kpage = insert_frame_entry (cur->pagedir, upage);
+  uint8_t *kpage = insert_frame_entry (cur->pagedir, upage, PAL_USER);
   if (kpage == NULL)
     return false;
 
@@ -548,6 +572,32 @@ load_segment_from_file (struct file *file, off_t ofs, uint8_t *upage,
       return false; 
     }
   memset (kpage + read_bytes, 0, PGSIZE - read_bytes);
+
+  /* Add the page to the process's address space. */
+  if (!install_page (upage, kpage, writable)) 
+    {
+      remove_frame_entry (cur->pagedir, upage);
+      return false; 
+    }
+
+  return true;
+}
+
+/* Load from file just one page */
+static bool
+load_segment_from_swap (uint8_t *upage, bool writable) 
+{
+  struct thread *cur = thread_current ();
+  uint8_t *kpage;
+  ASSERT (pg_ofs (upage) == 0);
+
+  /* Get a page of memory. */
+  kpage = insert_frame_entry (cur->pagedir, upage, PAL_USER);
+  if (kpage == NULL)
+      return false;
+
+  /* Load this page from swap */
+  free_swap_slot_by_address (cur->pagedir, upage, kpage);
 
   /* Add the page to the process's address space. */
   if (!install_page (upage, kpage, writable)) 
@@ -612,11 +662,22 @@ setup_stack (void **esp)
   struct thread *cur = thread_current ();
   uint8_t *kpage;
   bool success = false;
+  struct hash_elem *e;
+  struct page p, *spte;
 
+  lock_acquire (&load_lock);
   kpage = insert_frame_entry (cur->pagedir, PHYS_BASE-PGSIZE, PAL_USER | PAL_ZERO);
-  if (!insert_page_entry (PAGE_ZERO, PHYS_BASE-STACK_SIZE, PHYS_BASE, PHYS_BASE-STACK_SIZE, 0, 0, true))
-    return success;
-  
+  if (!insert_page_entry (STACK_SIZE/PGSIZE, PHYS_BASE-STACK_SIZE, PHYS_BASE, PHYS_BASE-STACK_SIZE, 0, 0, true))
+    {
+      lock_release (&load_lock);
+      return success;
+    }
+  // set mark to stack first page
+  p.upage = PHYS_BASE-STACK_SIZE;
+  e = hash_find (&cur->sup_pagedir, &p.elem);
+  spte = hash_entry (e, struct page, elem);
+  bitmap_set (spte->first_load, STACK_SIZE/PGSIZE-1, true);
+
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
@@ -625,6 +686,7 @@ setup_stack (void **esp)
       else
         remove_frame_entry (cur->pagedir, PHYS_BASE-PGSIZE);
     }
+  lock_release (&load_lock);
   return success;
 }
 

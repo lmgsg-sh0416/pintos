@@ -1,9 +1,11 @@
-#include "threads/thread.h"
-#include "vm/page.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
 #include <hash.h>
+#include <bitmap.h>
+#include "threads/thread.h"
+#include "threads/synch.h"
+#include "vm/page.h"
 
 // For hash table
 unsigned
@@ -30,14 +32,14 @@ init_sup_pagedir (void)
 }
 
 bool
-insert_page_entry (enum page_type type, void *start_vaddr, void *end_vaddr, void *upage,
+insert_page_entry (size_t page_num, void *start_vaddr, void *end_vaddr, void *upage,
     off_t file_offset, uint32_t read_bytes, bool writable)
 {
   struct thread *cur = thread_current ();
   struct page *p = (struct page*) malloc (sizeof *p);
   if (p == NULL)
     return false;
-  p->type = type;
+  p->first_load = bitmap_create (page_num);
   p->start_vaddr = start_vaddr;
   p->end_vaddr = end_vaddr;
   p->upage = upage;

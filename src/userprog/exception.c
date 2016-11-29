@@ -156,7 +156,6 @@ page_fault (struct intr_frame *f)
   not_present = (f->error_code & PF_P) == 0;
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
-
   /* Implement virtual memory, if fault_addr is valid then
      brings page which fault_addr refers. */
   // find segment
@@ -188,8 +187,17 @@ page_fault (struct intr_frame *f)
   // load segment
   if (!load_segment (spte, fault_addr)) 
     {
+      /*
+  printf ("Page fault at %p: %s error %s page in %s context. %d\n",
+      fault_addr,
+      not_present ? "not present" : "rights violation",
+      write ? "writing" : "reading",
+      user ? "user" : "kernel", page_fault_cnt);
+      */
+
       cur->process->exit_status = -1;
       thread_exit ();
     }
+  unpin_frame (cur->pagedir, fault_addr);
 }
 
