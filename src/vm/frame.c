@@ -39,6 +39,8 @@ evict (enum palloc_flags flags)
             return NULL;
           pagedir_clear_page (f->pd, f->upage);
           p = f->frame;
+          if (flags & PAL_ZERO)
+            memset (p, 0, PGSIZE);
           list_remove (&(f->elem));
           free (f);
           return p;

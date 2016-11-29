@@ -290,6 +290,8 @@ process_exit (void)
               free (fde);
             }
         }
+
+       remove_sup_page ();
     }
 
   if (cur->executable != NULL)

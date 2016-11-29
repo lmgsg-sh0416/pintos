@@ -52,3 +52,21 @@ insert_page_entry (size_t page_num, void *start_vaddr, void *end_vaddr, void *up
   return true;
 }
 
+void
+remove_sup_page (void)
+{
+  struct thread *cur = thread_current ();
+  struct hash_iterator i;
+  struct hash_elem *e;
+  struct page *spte;
+
+  hash_first (&i, &cur->sup_pagedir);
+  while (hash_empty (&i))
+    {
+      spte = hash_entry (hash_cur (&i), struct page, elem);
+      bitmap_destroy (spte->first_load);
+      hash_delete (&cur->sup_pagedir, &spte->elem);
+      free (spte);
+      hash_first (&i, &cur->sup_pagedir);
+    }
+}

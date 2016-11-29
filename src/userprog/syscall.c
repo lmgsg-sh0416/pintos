@@ -114,9 +114,10 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
       if (fde->num == fd)
         break;
 
-      if (list_next (e) == list_end (&cur->process->fd_table)){
-        return -1;
-      }
+      if (list_next (e) == list_end (&cur->process->fd_table))
+        {
+          return -1;
+        }
     }
 
   file_size = file_length (fde->file);
@@ -150,7 +151,7 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
         {
           free (mf);
           return -1;
-       }
+        }
     }
 
   if (list_empty (&cur->process->file_mapped))
@@ -261,11 +262,12 @@ syscall_exec (struct intr_frame *f, const char *cmd_line)
   struct thread *cur = thread_current ();
   tid_t result;
   if (!validate_user_memory (f, cmd_line, false))
-  {
-    cur->process->exit_status = -1;
-    thread_exit();
-    return -1;
-  }
+    {
+      cur->process->exit_status = -1;
+      thread_exit();
+      return -1;
+    }
+
   result = process_execute (cmd_line);
   unpin_frame (cur->pagedir, cmd_line);
   if (result == TID_ERROR)
@@ -281,11 +283,11 @@ syscall_create (struct intr_frame *f, const char *name, int32_t size)
   bool result;
   
   if (!validate_user_memory (f, name, false))
-  {
-    cur->process->exit_status = -1;
-    thread_exit();
-    return -1;
-  }
+    {
+      cur->process->exit_status = -1;
+      thread_exit();
+      return -1;
+    }
 
   result = filesys_create (name, size);
   unpin_frame (cur->pagedir, name);
@@ -299,17 +301,14 @@ syscall_remove (struct intr_frame *f, const char *name)
   bool result;
   
   if (!validate_user_memory (f, name, false))
-  {
-    cur->exit_status = -1;
-    thread_exit();
-    return -1;
-  }
+    {
+      cur->exit_status = -1;
+      thread_exit();
+      return -1;
+    }
 
   result = filesys_remove (name);
 
-
-
-  /* what if the file is opened? */
   unpin_frame (thread_current ()->pagedir, name);
   return result;
 }
@@ -397,14 +396,15 @@ syscall_read (struct intr_frame *f, int fd, char *buffer, unsigned size)
  
   int i = 0;
   while (i < size)
-  {
-    if (!validate_user_memory (f, buffer+i, true))
-      {
-        cur->exit_status = -1;
-        thread_exit();
-      }
-    i += PGSIZE;
-  }
+    {
+      if (!validate_user_memory (f, buffer+i, true))
+        {
+          cur->exit_status = -1;
+          thread_exit();
+        }
+      i += PGSIZE;
+    }
+
   if (!validate_user_memory (f, buffer+size-1, true))
     {
       cur->exit_status = -1;
@@ -436,11 +436,12 @@ syscall_read (struct intr_frame *f, int fd, char *buffer, unsigned size)
 
   i = 0;
   while (i < size)
-  {
-    unpin_frame (thread_current ()->pagedir, buffer+i);
-    i += PGSIZE;
-  }
-    unpin_frame (thread_current ()->pagedir, buffer+size-1);
+    {
+      unpin_frame (thread_current ()->pagedir, buffer+i);
+      i += PGSIZE;
+    }
+
+  unpin_frame (thread_current ()->pagedir, buffer+size-1);
   return read;
 }
 
@@ -452,14 +453,15 @@ syscall_write (struct intr_frame *f, int fd, const char *buffer, unsigned size)
   
   int i = 0;
   while (i < size)
-  {
-    if (!validate_user_memory (f, buffer+i, false))
-      {
-        cur->exit_status = -1;
-        thread_exit();
-      }
-    i += PGSIZE;
-  }
+    {
+      if (!validate_user_memory (f, buffer+i, false))
+        {
+          cur->exit_status = -1;
+          thread_exit();
+        }
+      i += PGSIZE;
+    }
+
   if (!validate_user_memory (f, buffer+size-1, false))
     {
       cur->exit_status = -1;
@@ -499,10 +501,11 @@ syscall_write (struct intr_frame *f, int fd, const char *buffer, unsigned size)
 
   i = 0;
   while (i < size)
-  {
-    unpin_frame (thread_current ()->pagedir, buffer+i);
-    i += PGSIZE;
-  }
+    {
+      unpin_frame (thread_current ()->pagedir, buffer+i);
+      i += PGSIZE;
+    }
+
   unpin_frame (thread_current ()->pagedir, buffer+size-1);
   return written;
 }
@@ -589,10 +592,10 @@ syscall_handler (struct intr_frame *f)
   ASSERT (cur->process != NULL);
 
   if (!validate_user_memory (f, f->esp, false))
-  {
-    cur->process->exit_status = -1;
-    thread_exit();
-  }
+    {
+      cur->process->exit_status = -1;
+      thread_exit();
+    }
 
   syscall_num = *((int *)f->esp);
   
