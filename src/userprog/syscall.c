@@ -106,6 +106,9 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
       return -1;
     }
 
+  if (list_empty (&cur->process->fd_table))
+    return -1;
+
   for (e = list_begin (&cur->process->fd_table);
        e != list_end (&cur->process->fd_table);
        e = list_next (e))

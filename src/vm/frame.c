@@ -7,42 +7,39 @@
 #include "userprog/pagedir.h"
 #include "vm/frame.h"
 
-static struct list frame_table;
+static struct frame_entry *frame_table;
+static uint32_t frame_head;
+static uint32_t frame_entry_num;
 static struct lock frame_lock;
 
 /* return null if eviction fail */
 static void*
 evict (enum palloc_flags flags)
 {
-  struct list_elem *e;
-  struct frame_entry *f;
   void *p;
   bool success;
   while (true)
     {
-      e = list_pop_front (&frame_table);
-      f = list_entry (e, struct frame_entry, elem);
       // clock algorithm
-      if (f->pinned)
+      if (frame_table[frame_head].valid == false)
+        frame_head = (frame_head + 1) % frame_entry_num;
+      else if (frame_table[frame_head].pinned)
+        frame_head = (frame_head + 1) % frame_entry_num;
+      else if (pagedir_is_accessed (frame_table[frame_head].pd, frame_table[frame_head].upage))
         {
-          list_push_back (&frame_table, &(f->elem));
-        }
-      else if (pagedir_is_accessed (f->pd, f->upage))
-        {
-          pagedir_set_accessed (f->pd, f->upage, false);
-          list_push_back (&frame_table, &(f->elem));
+          pagedir_set_accessed (frame_table[frame_head].pd, frame_table[frame_head].upage, false);
+          frame_head = (frame_head + 1) % frame_entry_num;
         }
       else
         {
-          success = allocate_swap_slot (f->pd, f->upage, f->frame);
+          success = allocate_swap_slot (frame_table[frame_head].pd, frame_table[frame_head].upage, frame_table[frame_head].frame);
           if (!success)
             return NULL;
-          pagedir_clear_page (f->pd, f->upage);
-          p = f->frame;
+          frame_table[frame_head].valid = false;
+          pagedir_clear_page (frame_table[frame_head].pd, frame_table[frame_head].upage);
+          p = frame_table[frame_head].frame;
           if (flags & PAL_ZERO)
             memset (p, 0, PGSIZE);
-          list_remove (&(f->elem));
-          free (f);
           return p;
         }
     }
@@ -50,9 +47,13 @@ evict (enum palloc_flags flags)
 }
 
 void
-init_frame_table (void)
+init_frame_table (uint32_t ram_size)
 {
-  list_init (&frame_table);
+  uint32_t frame_table_size;
+  frame_entry_num = ram_size/4;
+  frame_table_size = frame_entry_num * sizeof (struct frame_entry);
+  frame_table = palloc_get_multiple (frame_table_size/PGSIZE, PAL_USER | PAL_ZERO);
+  frame_head = 0;
   lock_init (&frame_lock);
 }
 
@@ -60,7 +61,6 @@ init_frame_table (void)
 void*
 insert_frame_entry (uint32_t *pd, void *upage, enum palloc_flags flags)
 {
-  struct frame_entry *f;
   void *frame;
   lock_acquire (&frame_lock);
   frame = palloc_get_page (flags);
@@ -69,12 +69,15 @@ insert_frame_entry (uint32_t *pd, void *upage, enum palloc_flags flags)
       frame = evict (flags);
       ASSERT (frame != NULL);   // induce kernel panic when no one can be evicted
     }
-  f = (struct frame_entry*) malloc (sizeof *f);
-  f->frame = frame;
-  f->pd = pd;
-  f->upage = upage;
-  f->pinned = 1;
-  list_push_back (&frame_table, &(f->elem));
+  while (frame_table[frame_head].valid != false)
+    frame_head = (frame_head + 1) % frame_entry_num;
+  frame_table[frame_head].valid = true;
+  frame_table[frame_head].frame = frame;
+  frame_table[frame_head].pd = pd;
+  frame_table[frame_head].upage = upage;
+  frame_table[frame_head].pinned = 1;
+  frame_head = (frame_head + 1) % frame_entry_num;
+
   lock_release (&frame_lock);
   return frame;
 }
@@ -82,62 +85,47 @@ insert_frame_entry (uint32_t *pd, void *upage, enum palloc_flags flags)
 void
 remove_frame_entry (uint32_t *pd, void *upage)
 {
-  struct frame_entry *f;
-  struct list_elem *e;
   lock_acquire (&frame_lock);
-  for (e = list_begin(&frame_table); e != list_end (&frame_table);
-       e = list_next (e))
-    {
-      f = list_entry (e, struct frame_entry, elem);
-      if (f->pd == pd && f->upage == upage)
-        break;
-    }
-  ASSERT (e != list_end (&frame_table));
-  palloc_free_page (f->frame);
-  list_remove (&(f->elem));
-  free (f);
+  while (true)
+  {
+    if (frame_table[frame_head].valid == true && frame_table[frame_head].pd == pd && frame_table[frame_head].upage == upage)
+      break;
+    frame_head = (frame_head + 1) % frame_entry_num;
+  }
+  palloc_free_page (frame_table[frame_head].frame);
+  frame_table[frame_head].valid = false;
   lock_release (&frame_lock);
 }
 
 void
 pin_frame (uint32_t *pd, void *uaddr)
 {
-  struct frame_entry *f;
-  struct list_elem *e;
   void *upage = pg_round_down (uaddr);
+  int i;
   lock_acquire (&frame_lock);
-  for (e = list_begin(&frame_table); e != list_end (&frame_table);
-       e = list_next (e))
-    {
-      f = list_entry (e, struct frame_entry, elem);
-      if (f->pd == pd && f->upage == upage)
-        break;
-    }
-  if (e != list_end (&frame_table))
-    {
-      f->pinned++;
-    }
+  for (i=0;i<frame_entry_num;i++)
+  {
+    if (frame_table[i].valid == true && frame_table[i].pd == pd && frame_table[i].upage == upage)
+      break;
+  }
+  if (i != frame_entry_num)
+    frame_table[i].pinned++;
   lock_release (&frame_lock);
 }
 
 void
 unpin_frame (uint32_t *pd, void *uaddr)
 {
-  struct frame_entry *f;
-  struct list_elem *e;
   void *upage = pg_round_down (uaddr);
+  int i;
   lock_acquire (&frame_lock);
-  for (e = list_begin(&frame_table); e != list_end (&frame_table);
-       e = list_next (e))
-    {
-      f = list_entry (e, struct frame_entry, elem);
-      if (f->pd == pd && f->upage == upage)
-        break;
-    }
-  if (e != list_end (&frame_table))
-    {
-      f->pinned--;
-    }
+  for (i=0;i<frame_entry_num;i++)
+  {
+    if (frame_table[i].valid == true && frame_table[i].pd == pd && frame_table[i].upage == upage)
+      break;
+  }
+  if (i != frame_entry_num)
+    frame_table[i].pinned--;
   lock_release (&frame_lock);
 }
 

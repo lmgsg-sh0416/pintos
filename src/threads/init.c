@@ -128,7 +128,7 @@ main (void)
 #endif
 
 #ifdef VM
-  init_frame_table ();
+  init_frame_table (init_ram_pages * PGSIZE / 1024);
   init_swap_table ();
   init_load_lock ();
 #endif
