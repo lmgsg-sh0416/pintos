@@ -94,7 +94,6 @@ allocate_swap_slot (uint32_t *pd, void *upage, void *frame)
   // case: no swap sector
   if (i==swap_bitmap_size)
     {
-      printf("no nononon\n");
       lock_release (&swap_lock);
       return false;
     }

@@ -249,6 +249,7 @@ syscall_munmap (struct intr_frame *f, mapid_t mapid)
       unpin_frame (cur->pagedir, upage);
     }
 
+  bitmap_destroy (spte->first_load);
   hash_delete (&cur->sup_pagedir, &spte->elem);
   free (spte);
 
