@@ -219,6 +219,11 @@ syscall_read (struct intr_frame *f, int fd, char *buffer, unsigned size)
       }
     i += PGSIZE;
   }
+  if (!validate_user_memory (f, buffer+size-1, false))
+    {
+      cur->exit_status = -1;
+      thread_exit();
+    }
 
   if (fd == STDIN_FILENO)
     for (read = 0; read < size; read++)
@@ -249,6 +254,7 @@ syscall_read (struct intr_frame *f, int fd, char *buffer, unsigned size)
     unpin_frame (thread_current ()->pagedir, buffer+i);
     i += PGSIZE;
   }
+    unpin_frame (thread_current ()->pagedir, buffer+size-1);
   return read;
 }
 
@@ -268,6 +274,11 @@ syscall_write (struct intr_frame *f, int fd, const char *buffer, unsigned size)
       }
     i += PGSIZE;
   }
+  if (!validate_user_memory (f, buffer+size-1, true))
+    {
+      cur->exit_status = -1;
+      thread_exit();
+    }
 
   if (fd == STDOUT_FILENO)
     {
@@ -306,6 +317,7 @@ syscall_write (struct intr_frame *f, int fd, const char *buffer, unsigned size)
     unpin_frame (thread_current ()->pagedir, buffer+i);
     i += PGSIZE;
   }
+  unpin_frame (thread_current ()->pagedir, buffer+size-1);
   return written;
 }
 
