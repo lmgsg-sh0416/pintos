@@ -124,6 +124,8 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
     }
 
   file_size = file_length (fde->file);
+  if (file_size == 0)
+    return -1;
 
   while (upage < addr + file_size)
     {
@@ -204,6 +206,9 @@ syscall_munmap (struct intr_frame *f, mapid_t mapid)
   void *upage;
   off_t offset;
   off_t file_size;
+
+  if (list_empty (&cur->process->file_mapped))
+    return;
 
   for (e = list_begin (&cur->process->file_mapped);
        e != list_end (&cur->process->file_mapped);

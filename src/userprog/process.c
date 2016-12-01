@@ -270,6 +270,7 @@ process_exit (void)
                   
                 }
 
+              bitmap_destroy (spte->first_load);
               hash_delete (&cur->sup_pagedir, &spte->elem);
               free (spte);
 
