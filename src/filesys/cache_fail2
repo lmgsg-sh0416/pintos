@@ -1,0 +1,159 @@
+#include "cache.h"
+#include <string.h>
+#include "threads/vaddr.h"
+#include "threads/palloc.h"
+#include "filesys/filesys.h"
+
+static struct cache *cache_pool;
+
+static struct list buffer_cache;
+static struct lock cache_lock;
+
+static size_t num_cache_entries;
+
+void
+init_buffer_cache ()
+{
+  uint32_t buffer_cache_size = CACHE_SIZE_LIMIT * sizeof (struct cache);
+  uint32_t num_pages = buffer_cache_size / PGSIZE;
+
+  if (buffer_cache_size % PGSIZE != 0)
+    num_pages++;
+
+  cache_pool = palloc_get_multiple (num_pages, PAL_USER | PAL_ZERO);
+  list_init (&buffer_cache);
+  lock_init (&cache_lock);
+  num_cache_entries = 0;
+}
+
+void
+read_buffer_cache (block_sector_t sector, uint8_t *buffer,
+                   off_t bytes_read, int sector_ofs, int chunk_size)
+{
+  struct cache *entry;
+  bool found = false;
+
+  lock_acquire (&cache_lock);
+  if (num_cache_entries != 0)
+    {
+      size_t i;
+      struct list_elem *e = list_begin (&buffer_cache);
+      for (i = 0; ; i++, e = list_next (e))
+        {
+          entry = list_entry (e, struct cache, elem);
+
+          if (entry->sector == sector)
+            {
+              list_remove (&entry->elem);
+              found = true;
+              break;
+            }
+
+          if (i == num_cache_entries - 1)
+            break;
+        }
+    }
+
+  if (!found)
+    {
+      if (num_cache_entries == CACHE_SIZE_LIMIT)
+        {
+          ASSERT (!list_empty (&buffer_cache));
+          struct cache *evicted = list_entry (list_pop_front (&buffer_cache), struct cache, elem);
+
+          printf ("nope\n");
+          if (evicted->dirty)
+            block_write (fs_device, evicted->sector, evicted->data);
+
+          list_remove (&evicted->elem);
+          entry = evicted;
+        }
+      else
+        {
+          printf ("num_cache_entry: %d\n", num_cache_entries);
+          entry = &cache_pool[num_cache_entries];
+          num_cache_entries++;
+        }
+
+      entry->sector = sector;
+      entry->dirty = false;
+
+      block_read (fs_device, entry->sector, entry->data);
+    }
+
+  memcpy (buffer + bytes_read, entry->data + sector_ofs, chunk_size);
+
+  list_push_back (&buffer_cache, &entry->elem);
+  lock_release (&cache_lock);
+}
+
+void
+write_buffer_cache (block_sector_t sector, const uint8_t *buffer,
+                    off_t bytes_written, int sector_ofs, int chunk_size)
+{
+  struct cache *entry;
+  bool found = false;
+
+  lock_acquire (&cache_lock);
+  if (num_cache_entries != 0)
+    {
+      size_t i;
+      struct list_elem *e = list_begin (&buffer_cache);
+      for (i = 0; ; i++, e = list_next (e))
+        {
+          entry = list_entry (e, struct cache, elem);
+
+          if (entry->sector == sector)
+            {
+              list_remove (&entry->elem);
+              found = true;
+              break;
+            }
+
+          if (i == num_cache_entries - 1)
+            break;
+        }
+    }
+
+  if (!found)
+    {
+      if (num_cache_entries == CACHE_SIZE_LIMIT)
+        {
+          ASSERT (!list_empty (&buffer_cache));
+          struct cache *evicted = list_entry (list_pop_front (&buffer_cache), struct cache, elem);
+
+          printf ("nope\n");
+          if (evicted->dirty)
+            block_write (fs_device, evicted->sector, evicted->data);
+
+          list_remove (&evicted->elem);
+          entry = evicted;
+        }
+      else
+        {
+          printf ("num_cache_entry: %d\n", num_cache_entries);
+          entry = &cache_pool[num_cache_entries];
+          num_cache_entries++;
+        }
+
+      entry->sector = sector;
+      entry->dirty = false;
+
+      if (sector_ofs > 0 || chunk_size < (BLOCK_SECTOR_SIZE - sector_ofs))
+        block_read (fs_device, entry->sector, entry->data);
+      else
+        memset (entry->data, 0, BLOCK_SECTOR_SIZE);
+    }
+
+  memcpy (entry->data + sector_ofs, buffer + bytes_written, chunk_size); 
+  entry->dirty = true;
+
+  list_push_back (&buffer_cache, &entry->elem);
+  lock_release (&cache_lock);
+}
+
+void
+flush_buffer_cache ()
+{
+
+}

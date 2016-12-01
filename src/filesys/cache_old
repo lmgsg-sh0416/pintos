@@ -1,0 +1,171 @@
+#include "filesys/cache.h"
+#include <string.h>
+#include "threads/synch.h"
+#include "threads/malloc.h"
+#include "threads/interrupt.h"
+#include "filesys/filesys.h"
+#include "filesys/inode.h"
+
+static struct list buffer_cache;
+static struct lock cache_lock;
+
+//struct cache *fetch_block ();
+
+void
+init_buffer_cache ()
+{
+  list_init (&buffer_cache);
+  lock_init (&cache_lock);
+}
+
+// how about bool?
+void
+read_buffer_cache (struct inode *inode, block_sector_t sector, uint8_t *buffer,
+                   off_t bytes_read, int sector_ofs, int chunk_size)
+{
+  struct cache *entry = NULL;
+  struct list_elem *e;
+  bool found = false;
+
+  lock_acquire (&cache_lock);
+  // list search
+  if (!list_empty (&buffer_cache))
+    {
+      for (e = list_begin (&buffer_cache); e != NULL; e = list_next (e))
+        {
+          entry = list_entry (e, struct cache, elem);
+          if (entry->sector == sector)
+            {
+              list_remove (&entry->elem);
+              found = true;
+              break;
+            }
+
+          if (e == list_end (&buffer_cache))
+            break;
+        }
+    }
+
+  // Not found in the cache. 
+  if (!found)
+    {
+      // We're about to read a block from file.
+      // Evict one for the room if cache is full.
+      if (list_size (&buffer_cache) == CACHE_SIZE_LIMIT)
+        {
+          ASSERT (!list_empty (&buffer_cache));
+          struct cache *evicted = list_entry (list_pop_front (&buffer_cache), struct cache, elem);
+          
+          // Is it dirty? Write to the disk.
+          if (evicted->dirty)
+            block_write (fs_device, evicted->sector, evicted->data);
+
+          free (evicted->data);
+          free (evicted);
+        }
+
+      entry = malloc (sizeof *entry);
+      entry->inode = inode;
+      entry->sector = sector;
+      entry->data = malloc (BLOCK_SECTOR_SIZE);
+      entry->dirty = false;
+      
+      block_read (fs_device, entry->sector, entry->data);
+    }
+
+  ASSERT (entry->data != NULL);
+
+  memcpy (buffer + bytes_read, entry->data + sector_ofs, chunk_size);
+  // This makes the most recently used entry is at the end.
+  // As a result, the least recently used entry goes at the head.
+  list_push_back (&buffer_cache, &entry->elem);
+  lock_release (&cache_lock);
+}
+
+void
+write_buffer_cache (struct inode *inode, block_sector_t sector, const uint8_t *buffer,
+                    off_t bytes_written, int sector_ofs, int chunk_size)
+{
+  struct cache *entry = NULL;
+  struct list_elem *e;
+  bool found = false;
+
+  lock_acquire (&cache_lock);
+  if (!list_empty (&buffer_cache))
+    {
+      for (e = list_begin (&buffer_cache); e != NULL; e = list_next (e))
+        {
+          entry = list_entry (e, struct cache, elem);
+          if (entry->sector == sector)
+            {
+              list_remove (&entry->elem);
+              found = true;
+              break;
+            }
+
+          if (e == list_end (&buffer_cache))
+            break;
+        }
+    }
+
+  if (!found)
+    {
+      if (list_size (&buffer_cache) == CACHE_SIZE_LIMIT)
+        {
+          ASSERT (!list_empty (&buffer_cache));
+
+          struct cache *evicted = list_entry (list_pop_front (&buffer_cache), struct cache, elem);
+
+          // if it's dirty, 
+          if (evicted->dirty)
+            block_write (fs_device, evicted->sector, evicted->data);
+
+          free (evicted->data);
+          free (evicted);
+        }
+
+      uint8_t *bf = malloc (BLOCK_SECTOR_SIZE);
+      entry = malloc (sizeof *entry);
+      entry->inode = inode;
+      entry->sector = sector;
+      entry->data = bf;//malloc (BLOCK_SECTOR_SIZE);
+      entry->dirty = false;
+
+      block_read (fs_device, entry->sector, bf);
+    }
+
+  if (!(sector_ofs > 0 || chunk_size < (BLOCK_SECTOR_SIZE - sector_ofs)))
+    memset (entry->data, 0, BLOCK_SECTOR_SIZE);
+  memcpy (entry->data + sector_ofs, buffer + bytes_written, chunk_size); 
+  entry->dirty = true;
+
+  list_push_back (&buffer_cache, &entry->elem);
+  lock_release (&cache_lock);
+}
+
+void 
+flush_buffer_cache ()
+{
+  struct list_elem *e;
+  enum intr_level old_level;
+  /* We don't want the timer to tick as the cache is flushed. 
+     Therefore, disable interrupts. */
+  lock_acquire (&cache_lock);
+  old_level = intr_disable ();
+  if (!list_empty (&buffer_cache))
+    {
+      for (e = list_begin (&buffer_cache); e != list_end (&buffer_cache); e = list_next (e))
+        {
+          struct cache *entry = list_entry (e, struct cache, elem);
+    
+          if (entry->dirty)
+            {
+              block_write (fs_device, entry->sector, entry->data);
+              entry->dirty = false;
+            }
+        }
+    }
+  intr_set_level (old_level);
+  lock_release (&cache_lock);
+}
+

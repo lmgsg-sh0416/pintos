@@ -5,10 +5,13 @@
 #include <string.h>
 #include "filesys/filesys.h"
 #include "filesys/free-map.h"
+#include "filesys/cache.h"
 #include "threads/malloc.h"
 
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
+
+static bool inode_grow ();
 
 /* On-disk inode.
    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
@@ -18,7 +21,22 @@ struct inode_disk
     off_t length;                       /* File size in bytes. */
     unsigned magic;                     /* Magic number. */
     uint32_t unused[125];               /* Not used. */
+//    block_sector_t direct[124];
+//    block_sector_t indirect;
+//    block_sector_t double_indirect;
   };
+
+struct indirect_block
+  {
+    block_sector_t ptr[128];
+  };
+
+//static bool inode_grow (size_t sectors)
+//{
+//  bool success = false;
+//
+//  return success;
+//}
 
 /* Returns the number of sectors to allocate for an inode SIZE
    bytes long. */
@@ -48,7 +66,32 @@ byte_to_sector (const struct inode *inode, off_t pos)
 {
   ASSERT (inode != NULL);
   if (pos < inode->data.length)
-    return inode->data.start + pos / BLOCK_SECTOR_SIZE;
+    {
+//      block_sector_t sector = pos / BLOCK_SECTOR_SIZE;
+//
+//      if (sector < 124)
+//        {
+//          return inode->data.direct[sector];
+//        }
+//      else if (sector < 252)
+//        {
+//          struct indirect_block *indir = malloc (sizeof *indir);
+//          
+//          indir = (struct indirect_block *) get_buffer_cache (124, false);
+//          return indir->ptr[sector - 124];
+//        }
+//      else if (sector < 16384) // 512 * 16384 = 8 MB
+//        {
+//          struct indirect_block *indir, *d_indir;
+//
+//          indir = (struct indirect_block *) get_buffer_cache (252, false);
+//          d_indir = (struct indirect_block *) get_buffer_cache (indir->ptr[(sector - 252) / 128], false);
+//          return d_indir->ptr[(sector - 252) % 128];
+//        }
+//      else
+//        return -1;
+      return inode->data.start + pos / BLOCK_SECTOR_SIZE;
+    }
   else
     return -1;
 }
@@ -87,6 +130,16 @@ inode_create (block_sector_t sector, off_t length)
       size_t sectors = bytes_to_sectors (length);
       disk_inode->length = length;
       disk_inode->magic = INODE_MAGIC;
+      
+//      if (free_map_allocate (1, &disk_inode->direct[0]))
+//        {
+//          static char zeros[BLOCK_SECTOR_SIZE];
+//
+//          block_write (fs_device, disk_inode->direct[0], zeros);
+//          
+//          success = inode_grow (sectors);
+//        }
+
       if (free_map_allocate (sectors, &disk_inode->start)) 
         {
           block_write (fs_device, sector, disk_inode);
@@ -220,31 +273,15 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
       if (chunk_size <= 0)
         break;
 
-      if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE)
-        {
-          /* Read full sector directly into caller's buffer. */
-          block_read (fs_device, sector_idx, buffer + bytes_read);
-        }
-      else 
-        {
-          /* Read sector into bounce buffer, then partially copy
-             into caller's buffer. */
-          if (bounce == NULL) 
-            {
-              bounce = malloc (BLOCK_SECTOR_SIZE);
-              if (bounce == NULL)
-                break;
-            }
-          block_read (fs_device, sector_idx, bounce);
-          memcpy (buffer + bytes_read, bounce + sector_ofs, chunk_size);
-        }
+      //bounce = read_buffer_cache (sector_idx);
+      bounce = get_buffer_cache (sector_idx, false);
+      memcpy (buffer + bytes_read, bounce + sector_ofs, chunk_size);
       
       /* Advance. */
       size -= chunk_size;
       offset += chunk_size;
       bytes_read += chunk_size;
     }
-  free (bounce);
 
   return bytes_read;
 }
@@ -281,38 +318,15 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
       if (chunk_size <= 0)
         break;
 
-      if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE)
-        {
-          /* Write full sector directly to disk. */
-          block_write (fs_device, sector_idx, buffer + bytes_written);
-        }
-      else 
-        {
-          /* We need a bounce buffer. */
-          if (bounce == NULL) 
-            {
-              bounce = malloc (BLOCK_SECTOR_SIZE);
-              if (bounce == NULL)
-                break;
-            }
-
-          /* If the sector contains data before or after the chunk
-             we're writing, then we need to read in the sector
-             first.  Otherwise we start with a sector of all zeros. */
-          if (sector_ofs > 0 || chunk_size < sector_left) 
-            block_read (fs_device, sector_idx, bounce);
-          else
-            memset (bounce, 0, BLOCK_SECTOR_SIZE);
-          memcpy (bounce + sector_ofs, buffer + bytes_written, chunk_size);
-          block_write (fs_device, sector_idx, bounce);
-        }
+      //bounce = write_buffer_cache (sector_idx); 
+      bounce = get_buffer_cache (sector_idx, true);
+      memcpy (bounce + sector_ofs, buffer + bytes_written, chunk_size);
 
       /* Advance. */
       size -= chunk_size;
       offset += chunk_size;
       bytes_written += chunk_size;
     }
-  free (bounce);
 
   return bytes_written;
 }
