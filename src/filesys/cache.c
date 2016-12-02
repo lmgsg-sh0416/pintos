@@ -1,9 +1,9 @@
 #include "filesys/cache.h"
+#include <string.h>
 #include "devices/timer.h"
+#include "threads/vaddr.h"
 #include "threads/thread.h"
 #include "threads/malloc.h"
-#include "threads/palloc.h"
-#include "threads/vaddr.h"
 #include "filesys/filesys.h"
 
 static struct cache *cache_pool;
@@ -21,12 +21,6 @@ void
 init_buffer_cache ()
 {
   uint32_t buffer_cache_size = CACHE_SIZE_LIMIT * sizeof (struct cache);
-  //uint32_t num_pages = buffer_cache_size / PGSIZE;
-
-  //if (buffer_cache_size % PGSIZE != 0)
-  //  num_pages++;
-
-  //cache_pool = palloc_get_multiple (num_pages, PAL_USER | PAL_ZERO);
   cache_pool = malloc (buffer_cache_size);
 
   list_init (&buffer_cache);
@@ -61,10 +55,9 @@ cache_read (block_sector_t sector, void *buffer)
 }
 
 void
-cache_write (block_sector_t sector, void *buffer)
+cache_write (block_sector_t sector, const void *buffer)
 {
   struct cache *entry = NULL;
-  block_sector_t *aux = NULL;
 
   lock_acquire (&cache_lock);
 
@@ -108,8 +101,6 @@ flush_buffer_cache ()
 static bool
 search_buffer_cache (block_sector_t sector, struct cache **entry)
 {
-  size_t i;
-
   if (list_empty (&buffer_cache))
     {
       *entry = NULL;
@@ -139,26 +130,28 @@ fetch_buffer_cache (block_sector_t sector)
   struct cache *entry = NULL;
 
   if (!search_buffer_cache (sector, &entry))
-  {
-    if (num_cache == CACHE_SIZE_LIMIT)
-      {
-        struct cache *evicted = list_entry (list_front (&buffer_cache), struct cache, elem);
-  
-        if (evicted->dirty)
-          block_write (fs_device, evicted->sector, evicted->data);
-        
-        list_remove (&evicted->elem);
-        entry = evicted;
-      }
-    else
-      entry = &cache_pool[num_cache++];
+    {
+      if (num_cache == CACHE_SIZE_LIMIT)
+        {
+          struct cache *evicted = list_entry (list_front (&buffer_cache), struct cache, elem);
+    
+          if (evicted->dirty)
+            block_write (fs_device, evicted->sector, evicted->data);
+          
+          list_remove (&evicted->elem);
+          entry = evicted;
+        }
+      else
+        {
+          entry = &cache_pool[num_cache++];
+        }
 
-    entry->sector = sector;
-    entry->dirty = false;
-  
-    block_read (fs_device, entry->sector, entry->data);
-    list_push_back (&buffer_cache, &entry->elem);
-  }
+      entry->sector = sector;
+      entry->dirty = false;
+    
+      block_read (fs_device, entry->sector, entry->data);
+      list_push_back (&buffer_cache, &entry->elem);
+    }
   return entry;
 }
 

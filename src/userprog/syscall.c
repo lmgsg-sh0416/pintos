@@ -16,10 +16,13 @@
 
 static void syscall_handler (struct intr_frame *);
 
+static struct lock fs_lock;
+
 void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+  lock_init (&fs_lock);
 }
 
 static bool
@@ -142,7 +145,9 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
 
   mf = malloc (sizeof *mf);
   mf->mid = -1;
+  lock_acquire (&fs_lock);
   mf->file = file_reopen (fde->file);
+  lock_release (&fs_lock);
   mf->start_addr = addr;
   mf->end_addr = addr + file_size;
 
@@ -239,7 +244,9 @@ syscall_munmap (struct intr_frame *f, mapid_t mapid)
 
       if (pagedir_is_dirty (cur->pagedir, upage))
         {
+          lock_acquire (&fs_lock);
           file_write_at (mf->file, upage, write_bytes, offset);
+          lock_release (&fs_lock);
         }
 
       remove_frame_entry (cur->pagedir, upage);
@@ -253,7 +260,9 @@ syscall_munmap (struct intr_frame *f, mapid_t mapid)
   hash_delete (&cur->sup_pagedir, &spte->elem);
   free (spte);
 
+  lock_acquire (&fs_lock);
   file_close (mf->file);
+  lock_release (&fs_lock);
   list_remove (&mf->elem);
   free (mf);
 }
@@ -272,6 +281,7 @@ syscall_exec (struct intr_frame *f, const char *cmd_line)
   tid_t result;
   if (!validate_user_memory (f, cmd_line, false))
     {
+      printf ("exec fail\n");
       cur->process->exit_status = -1;
       thread_exit();
       return -1;
@@ -293,12 +303,15 @@ syscall_create (struct intr_frame *f, const char *name, int32_t size)
   
   if (!validate_user_memory (f, name, false))
     {
+      printf ("create fail\n");
       cur->process->exit_status = -1;
       thread_exit();
       return -1;
     }
 
+  lock_acquire (&fs_lock);
   result = filesys_create (name, size);
+  lock_release (&fs_lock);
   unpin_frame (cur->pagedir, name);
   return result;
 }
@@ -316,7 +329,9 @@ syscall_remove (struct intr_frame *f, const char *name)
       return -1;
     }
 
+  lock_acquire (&fs_lock);
   result = filesys_remove (name);
+  lock_release (&fs_lock);
 
   unpin_frame (thread_current ()->pagedir, name);
   return result;
@@ -330,6 +345,7 @@ syscall_open (struct intr_frame *f, const char *name)
 
   if (!validate_user_memory (f, name, false))
     {
+      printf ("open fail\n");
       cur->exit_status = -1;
       thread_exit ();
       return -1;
@@ -338,7 +354,9 @@ syscall_open (struct intr_frame *f, const char *name)
   fd = malloc (sizeof (*fd));
   fd->num = -1;
 
+  lock_acquire (&fs_lock);
   fd->file = filesys_open (name);
+  lock_release (&fs_lock);
   if (fd->file == NULL)
     {
       free (fd);
@@ -391,8 +409,10 @@ syscall_close (int fd)
       if (list_next (e) == list_end (&cur->fd_table))
         return;
     }
-
+  
+  lock_acquire (&fs_lock);
   file_close (fde->file);
+  lock_release (&fs_lock);
   list_remove (&fde->elem);
   free (fde);
 }
@@ -440,7 +460,9 @@ syscall_read (struct intr_frame *f, int fd, char *buffer, unsigned size)
             return read;
         }
 
+      lock_acquire (&fs_lock);
       read = file_read (fde->file, buffer, size);
+      lock_release (&fs_lock);
     }
 
   i = 0;
@@ -505,7 +527,9 @@ syscall_write (struct intr_frame *f, int fd, const char *buffer, unsigned size)
             return written;
         }
 
+      lock_acquire (&fs_lock);
       written = file_write (fde->file, buffer, size);
+      lock_release (&fs_lock);
     }
 
   i = 0;

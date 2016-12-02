@@ -11,6 +11,8 @@
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
 
+static size_t temp = 0;
+
 static bool inode_grow ();
 
 /* On-disk inode.
@@ -143,6 +145,7 @@ inode_create (block_sector_t sector, off_t length)
       if (free_map_allocate (sectors, &disk_inode->start)) 
         {
           block_write (fs_device, sector, disk_inode);
+
           if (sectors > 0) 
             {
               static char zeros[BLOCK_SECTOR_SIZE];
@@ -233,7 +236,6 @@ inode_close (struct inode *inode)
           free_map_release (inode->data.start,
                             bytes_to_sectors (inode->data.length)); 
         }
-
       free (inode); 
     }
 }
@@ -298,8 +300,8 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
       offset += chunk_size;
       bytes_read += chunk_size;
     }
-
   free (bounce);
+
   return bytes_read;
 }
 
@@ -348,6 +350,7 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
               if (bounce == NULL)
                 break;
             }
+
           if (sector_ofs > 0 || chunk_size < sector_left)
             cache_read (sector_idx, bounce);
           else
@@ -361,8 +364,8 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
       offset += chunk_size;
       bytes_written += chunk_size;
     }
-
   free (bounce);
+
   return bytes_written;
 }
 
