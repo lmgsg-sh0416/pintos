@@ -2,6 +2,7 @@
 #include "devices/block.h"
 #include "threads/malloc.h"
 #include "threads/vaddr.h"
+#include "threads/palloc.h"
 #include <bitmap.h>
 
 #define SWAP_SECTOR_SIZE ((PGSIZE)/(BLOCK_SECTOR_SIZE))
@@ -10,14 +11,25 @@ static struct list swap_table;
 static struct bitmap *swap_bitmap;
 static struct block *swap_block;
 
+static struct swap_entry *swap_pool;
+static struct list free_swap;
+
 static struct lock swap_lock;
 
 void
 init_swap_table ()
 {
+  int num, i, size;
   list_init (&swap_table);
   swap_block = block_get_role (BLOCK_SWAP);
   swap_bitmap = bitmap_create (block_size (swap_block) / SWAP_SECTOR_SIZE);
+  size = block_size (swap_block) / SWAP_SECTOR_SIZE;
+  num = size * sizeof (struct swap_entry) / PGSIZE;
+  num++;
+  swap_pool = palloc_get_multiple (PAL_ASSERT | PAL_USER | PAL_ZERO, num);
+  list_init (&free_swap);
+  for (i=0; i<size; i++)
+    list_push_back (&free_swap, &(swap_pool[i].elem));
   lock_init (&swap_lock);
 }
 
@@ -52,7 +64,7 @@ free_swap_slot_by_address (uint32_t *pd, void *upage, void *frame)
   bitmap_set (swap_bitmap, s->sector, false);
   // insert swap_entry into swap_table
   list_remove (&(s->elem));
-  free (s);
+  list_push_back (&free_swap, &(s->elem));
   lock_release (&swap_lock);
 }
 
@@ -73,7 +85,7 @@ free_swap_slot_by_pd (uint32_t *pd)
           bitmap_set (swap_bitmap, s->sector, false);
           // remove swap_entry into swap_table
           list_remove (&(s->elem));
-          free (s);
+          list_push_back (&free_swap, &(s->elem));
         }
     }
   lock_release (&swap_lock);
@@ -106,7 +118,9 @@ allocate_swap_slot (uint32_t *pd, void *upage, void *frame)
   // mark bitmap
   bitmap_set (swap_bitmap, i, true);
   // insert swap_entry into swap_table
-  s = (struct swap_entry*) malloc (sizeof *s);
+  if (list_empty (&free_swap))
+    PANIC ("no swap slot");
+  s = list_entry (list_pop_front (&free_swap), struct swap_entry, elem);
   s->sector = i;
   s->pd = pd;
   s->upage = upage;

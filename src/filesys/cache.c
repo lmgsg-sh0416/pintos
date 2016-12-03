@@ -129,12 +129,12 @@ cache_read (block_sector_t sector, void *buffer)
 
   lock_release (&cache_lock);
 
-  aux = malloc (sizeof *aux);
-  if (aux != NULL)
-    {
-      *aux = sector + 1;
-      thread_create ("read-ahead", PRI_MIN, read_ahead, aux);
-    }
+//  aux = malloc (sizeof *aux);
+//  if (aux != NULL)
+//    {
+//      *aux = sector + 1;
+//      thread_create ("read-ahead", PRI_MIN, read_ahead, aux);
+//    }
 }
 
 void

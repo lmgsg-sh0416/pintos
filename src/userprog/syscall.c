@@ -337,6 +337,7 @@ syscall_open (struct intr_frame *f, const char *name)
 
   if (!validate_user_memory (f, name, false))
     {
+      //printf ("invalid mem\n");
       cur->exit_status = -1;
       thread_exit ();
       return -1;
