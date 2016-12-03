@@ -1,18 +1,20 @@
-#include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
 #include <user/syscall.h>
+#include "devices/shutdown.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/malloc.h"
 #include "threads/vaddr.h"
 #include "userprog/process.h"
 #include "userprog/pagedir.h"
-#include "devices/shutdown.h"
-#include "filesys/filesys.h"
-#include "filesys/file.h"
+#include "userprog/syscall.h"
 #include "vm/frame.h"
 #include "vm/page.h"
+#include "filesys/filesys.h"
+#include "filesys/file.h"
+#include "filesys/inode.h"
+#include "filesys/directory.h"
 
 static void syscall_handler (struct intr_frame *);
 static struct lock fs_lock;
@@ -32,31 +34,19 @@ validate_user_memory (struct intr_frame *f, const char *vaddr, bool writable)
   struct page *spte;
   if (!is_user_vaddr (vaddr))
     return false;
-  // find segment which contain vaddr
-  hash_first (&i, &(cur->sup_pagedir));
+  hash_first (&i, &(cur->sup_pagedir));   // find segment which contain vaddr
   while (hash_next (&i))
     {
       spte = hash_entry (hash_cur (&i), struct page, elem);
       if (spte->start_vaddr <= vaddr && vaddr < spte->end_vaddr)
-      {
         break;
-      }
     }
-  // segment not found
-  if (hash_cur (&i) == NULL)  
-    {
+  if (hash_cur (&i) == NULL)  // segment not found  
       return false;
-    }
-  // segment is stack and vaddr is in red zone
-  if (spte->upage == PHYS_BASE-STACK_SIZE && vaddr < f->esp-128)
-  {
+  if (spte->upage == PHYS_BASE-STACK_SIZE && vaddr < f->esp-128) // segment is stack and vaddr is in red zone
     return false;
-  }
-  // writable check
-  if (writable == true && spte->writable == false)
-  {
+  if (writable == true && spte->writable == false)  // writable check
     return false;
-  }
   // everything is ok, so go and get and pin user page
   pin_frame (cur->pagedir, vaddr);
   if (pagedir_get_page (cur->pagedir, vaddr) == NULL) // page is unmapper
@@ -86,12 +76,9 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
   struct thread *cur = thread_current ();
   struct hash_iterator i;
   struct page *spte;
-  
   struct file_desc *fde;
-
   struct mmap_file *mf;
   struct list_elem *e;
-  
   size_t page_num;
   uint32_t file_size;
   void *upage = addr;
@@ -99,52 +86,39 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
   if (addr == 0 || // address is 0
       (uint32_t)addr % PGSIZE != 0 || // address is not page-aligned
       fd <= 2)     // given fd is stdin, stdout or stderr
-    {
-      return -1;
-    }
-
+    return -1;
   if (!is_user_vaddr (addr))
-    {
-      return -1;
-    }
-
+    return -1;
   if (list_empty (&cur->process->fd_table))
     return -1;
 
-  for (e = list_begin (&cur->process->fd_table);
-       e != list_end (&cur->process->fd_table);
+  for (e = list_begin (&cur->process->fd_table); e != list_end (&cur->process->fd_table);
        e = list_next (e))
     {
       fde = list_entry (e, struct file_desc, elem);
       if (fde->num == fd)
         break;
-
       if (list_next (e) == list_end (&cur->process->fd_table))
-        {
-          return -1;
-        }
+        return -1;
     }
 
   file_size = file_length (fde->file);
   if (file_size == 0)
     return -1;
-
   while (upage < addr + file_size)
     {
       if (pagedir_get_page (cur->pagedir, upage) != NULL) 
         return -1;
-
       upage += PGSIZE;
     }
-
   if (!is_user_vaddr (addr+file_size-1))
-    {
-      return -1;
-    }
+    return -1;
 
   mf = malloc (sizeof *mf);
   mf->mid = -1;
+  lock_acquire (&fs_lock);
   mf->file = file_reopen (fde->file);
+  lock_release (&fs_lock);
   mf->start_addr = addr;
   mf->end_addr = addr + file_size;
 
@@ -166,8 +140,7 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
   else
     {
       int mid = 0;
-      for (e = list_begin (&cur->process->file_mapped);
-           e != list_end (&cur->process->file_mapped);
+      for (e = list_begin (&cur->process->file_mapped); e != list_end (&cur->process->file_mapped);
            e = list_next (e))
         {
           struct mmap_file *mfe = list_entry (e, struct mmap_file, elem);
@@ -176,9 +149,7 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
               mf->mid = mid;
               break;
             }
-    
           mid++;
-    
           if (list_next (e) == list_end (&cur->process->file_mapped))
             mf->mid = mid;
         }
@@ -191,7 +162,6 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
       free (mf);
       return -1;
     }
-
   list_insert_ordered (&cur->process->file_mapped, &mf->elem, mf_less, NULL);
   return mf->mid;
 }
@@ -202,9 +172,7 @@ syscall_munmap (struct intr_frame *f, mapid_t mapid)
   struct thread *cur = thread_current ();
   struct mmap_file *mf;
   struct list_elem *e;
-
   struct page temp, *spte;
-
   void *upage;
   off_t offset;
   off_t file_size;
@@ -212,21 +180,18 @@ syscall_munmap (struct intr_frame *f, mapid_t mapid)
   if (list_empty (&cur->process->file_mapped))
     return;
 
-  for (e = list_begin (&cur->process->file_mapped);
-       e != list_end (&cur->process->file_mapped);
+  for (e = list_begin (&cur->process->file_mapped); e != list_end (&cur->process->file_mapped);
        e = list_next (e))
     {
       mf = list_entry (e, struct mmap_file, elem);
       if (mf->mid == mapid)
         break;
-
       if (list_next (e) == list_end (&cur->process->file_mapped))
         return;
     }
 
   temp.upage = mf->start_addr;
   spte = hash_entry (hash_find (&cur->sup_pagedir, &temp.elem), struct page, elem);
-
   file_size = file_length (mf->file);
 
   offset = 0;
@@ -235,15 +200,13 @@ syscall_munmap (struct intr_frame *f, mapid_t mapid)
     {
       off_t write_bytes = (file_size - offset) >= PGSIZE ? PGSIZE : file_size - offset;
       if (!validate_user_memory (f, upage, true))
-        {
           return;
-        }
-
       if (pagedir_is_dirty (cur->pagedir, upage))
         {
+          lock_acquire (&fs_lock);
           file_write_at (mf->file, upage, write_bytes, offset);
+          lock_release (&fs_lock);
         }
-
       remove_frame_entry (cur->pagedir, upage);
       pagedir_clear_page (cur->pagedir, upage);
       upage += PGSIZE;
@@ -255,7 +218,9 @@ syscall_munmap (struct intr_frame *f, mapid_t mapid)
   hash_delete (&cur->sup_pagedir, &spte->elem);
   free (spte);
 
+  lock_acquire (&fs_lock);
   file_close (mf->file);
+  lock_release (&fs_lock);
   list_remove (&mf->elem);
   free (mf);
 }
@@ -287,82 +252,171 @@ syscall_exec (struct intr_frame *f, const char *cmd_line)
     return result;
 }
 
+static struct dir*
+trace_dir (const char *name, char **real_name)
+{
+  struct thread *cur = thread_current ();
+  struct dir *target;
+  struct inode *target_inode;
+  char *dir_name, *real_name_;
+  bool result = true;
+  // find name of directory
+  real_name_ = strrchr (name, '/');
+  if (!real_name_)              // special case: no slash
+    {
+      target = dir_reopen (cur->process->dir);
+      real_name_ = name;
+    }
+  else if(real_name_ == name)    // special case: create in root
+    {
+      target = dir_open_root ();
+      real_name_++;
+    }
+  else                         // general case
+    {
+      dir_name = malloc (real_name_ - name + 2);
+      memcpy (dir_name, name, real_name_ - name + 1);
+      dir_name[real_name_ - name + 1] = '\0';
+      //printf("dir_name: %s\n", dir_name);
+      // find target directory
+      if (dir_name[0] == '/')    // absolute
+        {
+          target = dir_open_root ();
+          result = dir_multi_lookup (&target, dir_name+1);
+        }
+      else                  // relative
+        {
+          target = dir_reopen (cur->process->dir);
+          result = dir_multi_lookup (&target, dir_name);
+        }
+      real_name_++;
+      free (dir_name);
+    }
+  if (result)
+    {
+      *real_name = real_name_;
+      return target;
+    }
+  else
+    return NULL;
+}
+
 static bool
 syscall_create (struct intr_frame *f, const char *name, int32_t size)
 {
   struct thread *cur = thread_current ();
-  bool result;
+  struct dir *dir;
+  char *temp, *real_name;
+  bool result = false;
   
-  if (!validate_user_memory (f, name, false))
-    {
-      cur->process->exit_status = -1;
-      thread_exit();
-      return -1;
-    }
+  for (temp = name; *temp; temp++)
+    if (!validate_user_memory (f, temp, false))
+      {
+        cur->process->exit_status = -1;
+        thread_exit ();
+      }
 
   lock_acquire (&fs_lock);
-  result = filesys_create (name, size);
+  dir = trace_dir (name, &real_name);
+  if (dir)
+    {
+      result = filesys_create (real_name, size, dir);
+      dir_close (dir);
+    }
   lock_release (&fs_lock);
 
-  unpin_frame (cur->pagedir, name);
+  for (temp = name; *temp; temp++)
+    unpin_frame (cur->pagedir, temp);
   return result;
 }
 
 static bool
 syscall_remove (struct intr_frame *f, const char *name)
 {
-  struct process *cur = thread_current ()->process;
-  bool result;
+  struct thread *cur = thread_current ();
+  struct dir *dir;
+  char *temp, *real_name;
+  bool result = false;
   
-  if (!validate_user_memory (f, name, false))
-    {
-      cur->exit_status = -1;
-      thread_exit();
-      return -1;
-    }
+  for (temp = name; *temp; temp++)
+    if (!validate_user_memory (f, temp, false))
+      {
+        cur->process->exit_status = -1;
+        thread_exit ();
+      }
 
   lock_acquire (&fs_lock);
-  result = filesys_remove (name);
+  dir = trace_dir (name, &real_name);
+  if (dir)
+    {
+      result = filesys_remove (real_name, dir);
+      dir_close (dir);
+    }
   lock_release (&fs_lock);
 
-  unpin_frame (thread_current ()->pagedir, name);
+  for (temp = name; *temp; temp++)
+    unpin_frame (cur->pagedir, temp);
   return result;
 }
 
 static int
 syscall_open (struct intr_frame *f, const char *name)
 {
-  struct process *cur = thread_current ()->process;
+  struct thread *cur = thread_current ();
   struct file_desc *fd;
+  struct dir *dir;
+  char *temp, *real_name;
 
-  if (!validate_user_memory (f, name, false))
-    {
-      //printf ("invalid mem\n");
-      cur->exit_status = -1;
-      thread_exit ();
-      return -1;
-    }
+  for (temp = name; *temp; temp++)
+    if (!validate_user_memory (f, temp, false))
+      {
+        cur->process->exit_status = -1;
+        thread_exit ();
+      }
 
   fd = malloc (sizeof (*fd));
   fd->num = -1;
+  fd->dir = fd->file = NULL;
 
   lock_acquire (&fs_lock);
-  fd->file = filesys_open (name);
+  dir = trace_dir (name, &real_name);
+  if (dir)
+    {
+      bool is_directory = true;
+      struct inode *inode;
+      bool result = true;
+      if (strlen (real_name) == 0)
+        is_directory = true;
+      else
+        result = dir_lookup (dir, real_name, &inode, &is_directory);
+      if (result)
+        {
+          if (is_directory)
+            fd->dir = dir_open (inode);
+          else
+            fd->file = file_open (inode);
+          //printf("file: %x\n", fd->file);
+          fd->is_directory = is_directory;
+  //printf("OPEN WITH dir %x file %x is_directory %d\n", fd->dir, fd->file, is_directory);
+        }
+      dir_close (dir);
+    }
   lock_release (&fs_lock);
-
-  if (fd->file == NULL)
+  if ((fd->is_directory && fd->dir == NULL) ||
+      (!fd->is_directory && fd->file == NULL))
     {
       free (fd);
       return -1;
     }
 
-  if (list_empty (&cur->fd_table))
+  if (list_empty (&cur->process->fd_table))
     fd->num = 3;
   else 
     {
       int num = 3;
       struct list_elem *e;
-      for (e = list_begin (&cur->fd_table); e != list_end (&cur->fd_table); e = list_next (e))
+      for (e = list_begin (&cur->process->fd_table); e != list_end (&cur->process->fd_table); 
+           e = list_next (e))
         {
           struct file_desc *fde = list_entry (e, struct file_desc, elem);
           if (num < fde->num)
@@ -370,16 +424,16 @@ syscall_open (struct intr_frame *f, const char *name)
               fd->num = num;
               break;
             }
-
           num++;
-
-          if (list_next (e) == list_end (&cur->fd_table))
+          if (list_next (e) == list_end (&cur->process->fd_table))
             fd->num = num;
         }
     }
+  list_insert_ordered (&cur->process->fd_table, &fd->elem, fd_less, NULL);
 
-  list_insert_ordered (&cur->fd_table, &fd->elem, fd_less, NULL);
-  unpin_frame (thread_current ()->pagedir, name);
+  for (temp = name; *temp; temp++)
+    unpin_frame (cur->pagedir, temp);
+  //printf("OPEN END WITH FD %d dir %x file %x\n", fd->num, fd->dir, fd->file);
   return fd->num;
 }
 
@@ -387,7 +441,6 @@ static void
 syscall_close (int fd)
 {
   struct process *cur = thread_current ()->process;
-
   struct file_desc *fde;
   struct list_elem *e;
   if (list_empty (&cur->fd_table))
@@ -398,15 +451,16 @@ syscall_close (int fd)
       fde = list_entry (e, struct file_desc, elem);
       if (fde->num == fd)
         break;
-
-      if (list_next (e) == list_end (&cur->fd_table))
-        return;
     }
+  if (e == list_end (&cur->fd_table))
+    return;
 
   lock_acquire (&fs_lock);
-  file_close (fde->file);
+  if (fde->is_directory)
+    dir_close (fde->dir);
+  else
+    file_close (fde->file);
   lock_release (&fs_lock);
-
   list_remove (&fde->elem);
   free (fde);
 }
@@ -449,12 +503,15 @@ syscall_read (struct intr_frame *f, int fd, char *buffer, unsigned size)
           fde = list_entry (e, struct file_desc, elem);
           if (fde->num == fd)
             break;
-
-          if (list_next (e) == list_end (&cur->fd_table))
-            return read;
         }
-
-      read = file_read (fde->file, buffer, size);
+      if (e == list_end (&cur->fd_table))
+        return read;
+      if (!fde->is_directory)
+        {
+          lock_acquire (&fs_lock);
+          read = file_read (fde->file, buffer, size);
+          lock_release (&fs_lock);
+        }
     }
 
   i = 0;
@@ -463,7 +520,6 @@ syscall_read (struct intr_frame *f, int fd, char *buffer, unsigned size)
       unpin_frame (thread_current ()->pagedir, buffer+i);
       i += PGSIZE;
     }
-
   unpin_frame (thread_current ()->pagedir, buffer+size-1);
   return read;
 }
@@ -514,12 +570,16 @@ syscall_write (struct intr_frame *f, int fd, const char *buffer, unsigned size)
           fde = list_entry (e, struct file_desc, elem);
           if (fde->num == fd)
             break;
-          
-          if (list_next (e) == list_end (&cur->fd_table))
-            return written;
         }
+      if (e == list_end (&cur->fd_table))
+        return written;
 
-      written = file_write (fde->file, buffer, size);
+      if (!fde->is_directory)
+        {
+          lock_acquire (&fs_lock);
+          written = file_write (fde->file, buffer, size);
+          lock_release (&fs_lock);
+        }
     }
 
   i = 0;
@@ -528,7 +588,6 @@ syscall_write (struct intr_frame *f, int fd, const char *buffer, unsigned size)
       unpin_frame (thread_current ()->pagedir, buffer+i);
       i += PGSIZE;
     }
-
   unpin_frame (thread_current ()->pagedir, buffer+size-1);
   return written;
 }
@@ -543,18 +602,20 @@ syscall_filesize (int fd)
   struct list_elem *e;
   if (list_empty (&cur->fd_table))
     return size;
-
   for (e = list_begin (&cur->fd_table); e != list_end (&cur->fd_table); e = list_next (e))
     {
       fde = list_entry (e, struct file_desc, elem);
       if (fde->num == fd)
         break;
-
-      if (list_next (e) == list_end (&cur->fd_table))
-        return size;
     }
-
-  size = file_length (fde->file);
+  if (e == list_end (&cur->fd_table))
+    return size;
+  if (!fde->is_directory)
+    {
+      lock_acquire (&fs_lock);
+      size = file_length (fde->file);
+      lock_release (&fs_lock);
+    }
   return size;
 }
 
@@ -567,18 +628,20 @@ syscall_seek (int fd, unsigned position)
   struct list_elem *e;
   if (list_empty (&cur->fd_table))
     return;
-
   for (e = list_begin (&cur->fd_table); e != list_end (&cur->fd_table); e = list_next (e))
     {
       fde = list_entry (e, struct file_desc, elem);
       if (fde->num == fd)
         break;
-
-      if (list_next (e) == list_end (&cur->fd_table))
-        return;
     }
-  
-  file_seek (fde->file, position);
+  if (e == list_end (&cur->fd_table))
+    return;
+  if (!fde->is_directory)
+  {
+    lock_acquire (&fs_lock);
+    file_seek (fde->file, position);
+    lock_release (&fs_lock);
+  }
 }
 
 static unsigned
@@ -591,19 +654,200 @@ syscall_tell (int fd)
   struct list_elem *e;
   if (list_empty (&cur->fd_table))
     return pos;
-
   for (e = list_begin (&cur->fd_table); e != list_end (&cur->fd_table); e = list_next (e))
     {
       fde = list_entry (e, struct file_desc, elem);
       if (fde->num == fd)
         break;
 
-      if (list_next (e) == list_end (&cur->fd_table))
-        return pos;
+    }
+  if (e == list_end (&cur->fd_table))
+    return pos;
+
+  if (!fde->is_directory)
+    {
+      lock_acquire (&fs_lock);
+      pos = file_tell (fde->file);
+      lock_release (&fs_lock);
+    }
+  return pos;
+}
+
+static bool 
+syscall_chdir (struct intr_frame *f, const char *dir)
+{
+  struct thread *cur = thread_current ();
+  struct dir *target;
+  struct inode *target_inode;
+  char *temp, *dir_name;
+  bool result = true;
+
+  for (temp = dir; *temp; temp++)
+    if (!validate_user_memory (f, temp, false))
+      {
+        cur->process->exit_status = -1;
+        thread_exit ();
+      }
+  
+  dir_name = malloc (strlen (dir) + 1);
+  memcpy (dir_name, dir, strlen (dir));
+  dir_name[strlen (dir)] = '\0';
+  // find target directory
+  if (dir[0] == '/')    // absolute
+    {
+      target = dir_open_root ();
+      result = dir_multi_lookup (&target, dir_name+1);
+    }
+  else                  // relative
+    {
+      target = dir_reopen (cur->process->dir);
+      result = dir_multi_lookup (&target, dir_name);
+    }
+  free (dir_name);
+  // change process's current directory
+  if (result)
+    {
+      lock_acquire (&fs_lock);
+      dir_close (cur->process->dir);
+      cur->process->dir = target;
+      lock_release (&fs_lock);
     }
 
-  pos = file_tell (fde->file);
-  return pos;
+  for (temp = dir; *temp; temp++)
+    unpin_frame (cur->pagedir, temp);
+  return result;
+}
+
+static bool 
+syscall_mkdir (struct intr_frame *f, const char *dir)
+{
+  struct thread *cur = thread_current ();
+  struct dir *target;
+  char *temp = dir-1, *directory_name;
+  struct inode *target_inode;
+  bool result = true;
+
+  for (temp = dir; *temp; temp++)
+    if (!validate_user_memory (f, temp, false))
+      {
+        cur->process->exit_status = -1;
+        thread_exit ();
+      }
+  
+  target = trace_dir (dir, &directory_name);
+
+  if (target)
+    {
+      //printf("[syscall_mkdir] - parent inode: %d\n", inode_get_inumber (dir_get_inode (target)));
+      block_sector_t new_directory_sector;
+      struct dir *child_dir;
+      result = free_map_allocate (1, &new_directory_sector) &&
+                dir_create (new_directory_sector, 16);
+      child_dir = dir_open (inode_open (new_directory_sector));
+      if (result)
+        {
+          //printf("[syscall_mkdir] - parent inode: %d, child inode: %d\n", inode_get_inumber (dir_get_inode (target)),
+           //   inode_get_inumber (dir_get_inode (child_dir)));
+          result = dir_add (target, directory_name, new_directory_sector, true) &&
+                    dir_add (child_dir, "..", inode_get_inumber (dir_get_inode (target)), true);
+        }
+      dir_close (child_dir);
+      dir_close (target);
+    }
+
+  for (temp = dir; *temp; temp++)
+    unpin_frame (cur->pagedir, temp);
+  //printf("mkdir end!!! %s\n", dir);
+  return result;
+}
+
+static bool 
+syscall_readdir (struct intr_frame *f, int fd, char *name)
+{
+  struct thread *cur = thread_current ();
+  struct file_desc *fde;
+  struct list_elem *e;
+  bool result;
+  int i;
+  // pin
+  for(i=0; i<READDIR_MAX_LEN+1; i++)
+    {
+      if (!validate_user_memory (f, name+i, true))
+        {
+          cur->process->exit_status = -1;
+          thread_exit ();
+        }
+    }
+
+  if (list_empty (&cur->process->fd_table))
+    return false;
+  for (e = list_begin (&cur->process->fd_table); e != list_end (&cur->process->fd_table); 
+       e = list_next (e))
+    {
+      fde = list_entry (e, struct file_desc, elem);
+      if (fde->num == fd && fde->is_directory == true)
+        break;
+    }
+  if (e == list_end (&cur->process->fd_table))
+    return false;
+
+  result = dir_readdir (fde->dir, name);
+  while (result && 
+          (strcmp (name, ".") == 0 || strcmp (name, "..") == 0))
+    result = dir_readdir (fde->dir, name);
+
+  // unpin
+  for(i=0; i<READDIR_MAX_LEN+1; i++)
+    {
+      unpin_frame (cur->pagedir, name+i);
+    }
+  return result;
+}
+
+static bool 
+syscall_isdir (struct intr_frame *f, int fd)
+{
+  struct thread *cur = thread_current ();
+  struct file_desc *fde;
+  struct list_elem *e;
+
+  if (list_empty (&cur->process->fd_table))
+    return false;
+  for (e = list_begin (&cur->process->fd_table); e != list_end (&cur->process->fd_table); 
+       e = list_next (e))
+    {
+      fde = list_entry (e, struct file_desc, elem);
+      if (fde->num == fd)
+        break;
+    }
+  if (e == list_end (&cur->process->fd_table))
+    return false;
+
+  return fde->is_directory;
+}
+
+static int
+syscall_inumber (struct intr_frame *f, int fd)
+{
+  struct thread *cur = thread_current ();
+  struct file_desc *fde;
+  struct list_elem *e;
+
+  if (list_empty (&cur->process->fd_table))
+    return -1;
+  for (e = list_begin (&cur->process->fd_table); e != list_end (&cur->process->fd_table); 
+       e = list_next (e))
+    {
+      fde = list_entry (e, struct file_desc, elem);
+      if (fde->num == fd)
+        break;
+    }
+  if (e == list_end (&cur->process->fd_table))
+    return -1;
+  if (fde->is_directory)
+    return inode_get_inumber (dir_get_inode (fde->dir));
+  else
+    return inode_get_inumber (file_get_inode (fde->file));
 }
 
 static void
@@ -637,6 +881,7 @@ syscall_handler (struct intr_frame *f)
     case SYS_CREATE:
     case SYS_SEEK:
     case SYS_MMAP:
+    case SYS_READDIR:
       if (!validate_user_memory (f, f->esp+8, false))
       {
         cur->process->exit_status = -1;
@@ -652,6 +897,10 @@ syscall_handler (struct intr_frame *f)
     case SYS_TELL:
     case SYS_CLOSE:
     case SYS_MUNMAP:
+    case SYS_CHDIR:
+    case SYS_MKDIR:
+    case SYS_ISDIR:
+    case SYS_INUMBER:
       if (!validate_user_memory (f, f->esp+4, false))
       {
         cur->process->exit_status = -1;
@@ -726,6 +975,27 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_MUNMAP:
       syscall_munmap (f, *(mapid_t *)(f->esp + 4));
+      unpin_frame (cur->pagedir, f->esp+4);
+      break;
+    case SYS_CHDIR:
+      f->eax = syscall_chdir (f, *((char **)(f->esp + 4)));
+      unpin_frame (cur->pagedir, f->esp+4);
+      break;
+    case SYS_MKDIR:
+      f->eax = syscall_mkdir (f, *((char **)(f->esp + 4)));
+      unpin_frame (cur->pagedir, f->esp+4);
+      break;
+    case SYS_READDIR:
+      f->eax = syscall_readdir (f, *(int *)(f->esp + 4), *((char **)(f->esp + 8)));
+      unpin_frame (cur->pagedir, f->esp+4);
+      unpin_frame (cur->pagedir, f->esp+8);
+      break;
+    case SYS_ISDIR:
+      f->eax = syscall_isdir (f, *(int *)(f->esp + 4));
+      unpin_frame (cur->pagedir, f->esp+4);
+      break;
+    case SYS_INUMBER:
+      f->eax = syscall_inumber (f, *(int *)(f->esp + 4));
       unpin_frame (cur->pagedir, f->esp+4);
       break;
     default:

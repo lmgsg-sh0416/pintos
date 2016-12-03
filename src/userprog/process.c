@@ -1,17 +1,9 @@
-#include "userprog/process.h"
 #include <debug.h>
 #include <inttypes.h>
 #include <round.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "userprog/gdt.h"
-#include "userprog/pagedir.h"
-#include "userprog/tss.h"
-#include "userprog/syscall.h"
-#include "filesys/directory.h"
-#include "filesys/file.h"
-#include "filesys/filesys.h"
 #include "threads/flags.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
@@ -19,6 +11,14 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "userprog/process.h"
+#include "userprog/gdt.h"
+#include "userprog/pagedir.h"
+#include "userprog/tss.h"
+#include "userprog/syscall.h"
+#include "filesys/directory.h"
+#include "filesys/file.h"
+#include "filesys/filesys.h"
 #include "vm/page.h"
 #include "vm/swap.h"
 
@@ -73,13 +73,17 @@ process_execute (const char *file_name)
     old_level = intr_disable ();
     p = (struct process*) malloc (sizeof *p);
     p->process_id = tid;
-    sema_init (&(p->wait_sema), 0);
+    sema_init (&p->wait_sema, 0);
     p->is_parent_dead = false;
     p->is_child_dead = false;
     list_push_back (&(cur->child_process), &(p->elem));
     list_init (&p->fd_table);
     list_init (&p->file_mapped);
     intr_set_level (old_level);
+    if (cur->process == NULL)
+      p->dir = dir_open_root ();
+    else
+      p->dir = dir_reopen (cur->process->dir);
     sema_up (&(cur->exec_sema2));
     /* Parent thread wait until success is updated */
     sema_down (&(cur->exec_sema));
@@ -287,7 +291,10 @@ process_exit (void)
             {
               fde = list_entry (e, struct file_desc, elem);
               e = list_next (e);
-              file_close (fde->file);
+              if (!fde->is_directory)
+                file_close (fde->file);
+              else
+                dir_close (fde->dir);
               free (fde);
             }
         }
@@ -318,22 +325,22 @@ process_exit (void)
   old_level = intr_disable ();
   /* It MUST be acceptable and valid for process */ 
   if (cur->process != NULL)
-  {
-    sema_up (&(cur->process->wait_sema));
-    cur->process->is_child_dead = true;
-    if (cur->process->is_parent_dead)
-      free (cur->process);
-  }
+    {
+      sema_up (&(cur->process->wait_sema));
+      cur->process->is_child_dead = true;
+      if (cur->process->is_parent_dead)
+        free (cur->process);
+    }
   /* Destroy child_process chain */
   while (!list_empty (&(cur->child_process)))
-  {
-    e = list_pop_front (&(cur->child_process));
-    p = list_entry (e, struct process, elem);
-    list_remove (&(p->elem));
-    p->is_parent_dead = true;
-    if (p->is_child_dead)
-      free (p);
-  }
+    {
+      e = list_pop_front (&(cur->child_process));
+      p = list_entry (e, struct process, elem);
+      list_remove (&(p->elem));
+      p->is_parent_dead = true;
+      if (p->is_child_dead)
+        free (p);
+    }
   intr_set_level (old_level);
 }
 
@@ -441,7 +448,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   init_sup_pagedir ();
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (file_name, NULL);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);

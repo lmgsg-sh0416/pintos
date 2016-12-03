@@ -150,9 +150,7 @@ cache_write (block_sector_t sector, const void *buffer)
 
   list_remove (&entry->elem);
   list_push_back (&buffer_cache, &entry->elem);
-
   ASSERT (list_size (&buffer_cache) == num_cache);
-
   lock_release (&cache_lock);
 }
 
