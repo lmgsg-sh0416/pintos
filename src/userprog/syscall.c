@@ -15,11 +15,13 @@
 #include "vm/page.h"
 
 static void syscall_handler (struct intr_frame *);
+static struct lock fs_lock;
 
 void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+  lock_init (&fs_lock);
 }
 
 static bool
@@ -298,7 +300,10 @@ syscall_create (struct intr_frame *f, const char *name, int32_t size)
       return -1;
     }
 
+  lock_acquire (&fs_lock);
   result = filesys_create (name, size);
+  lock_release (&fs_lock);
+
   unpin_frame (cur->pagedir, name);
   return result;
 }
@@ -316,7 +321,9 @@ syscall_remove (struct intr_frame *f, const char *name)
       return -1;
     }
 
+  lock_acquire (&fs_lock);
   result = filesys_remove (name);
+  lock_release (&fs_lock);
 
   unpin_frame (thread_current ()->pagedir, name);
   return result;
@@ -338,7 +345,10 @@ syscall_open (struct intr_frame *f, const char *name)
   fd = malloc (sizeof (*fd));
   fd->num = -1;
 
+  lock_acquire (&fs_lock);
   fd->file = filesys_open (name);
+  lock_release (&fs_lock);
+
   if (fd->file == NULL)
     {
       free (fd);
@@ -392,7 +402,10 @@ syscall_close (int fd)
         return;
     }
 
+  lock_acquire (&fs_lock);
   file_close (fde->file);
+  lock_release (&fs_lock);
+
   list_remove (&fde->elem);
   free (fde);
 }
