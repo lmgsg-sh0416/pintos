@@ -274,8 +274,24 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
         break;
 
       //bounce = read_buffer_cache (sector_idx);
-      bounce = get_buffer_cache (sector_idx, false);
-      memcpy (buffer + bytes_read, bounce + sector_ofs, chunk_size);
+      if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE)
+        {
+          /* Read full sector directly into caller's buffer. */
+          cache_read (sector_idx, buffer + bytes_read);
+        }
+      else
+        {
+          /* Read sector into bounce buffer, then partially copy
+             into caller's buffer. */
+          if (bounce == NULL)
+            {
+              bounce = malloc (BLOCK_SECTOR_SIZE);
+              if (bounce == NULL)
+                break;
+            }
+          cache_read (sector_idx, bounce);
+          memcpy (buffer + bytes_read, bounce + sector_ofs, chunk_size);
+        }
       
       /* Advance. */
       size -= chunk_size;
@@ -283,6 +299,7 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
       bytes_read += chunk_size;
     }
 
+  free (bounce);
   return bytes_read;
 }
 
@@ -318,9 +335,26 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
       if (chunk_size <= 0)
         break;
 
-      //bounce = write_buffer_cache (sector_idx); 
-      bounce = get_buffer_cache (sector_idx, true);
-      memcpy (bounce + sector_ofs, buffer + bytes_written, chunk_size);
+      if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE)
+        {
+          /* Write full sector to cache. */
+          cache_write (sector_idx, buffer + bytes_written);
+        }
+      else
+        {
+          if (bounce == NULL)
+            {
+              bounce = malloc (BLOCK_SECTOR_SIZE);
+              if (bounce == NULL)
+                break;
+            }
+          if (sector_ofs > 0 || chunk_size < sector_left)
+            cache_read (sector_idx, bounce);
+          else
+            memset (bounce, 0, BLOCK_SECTOR_SIZE);
+          memcpy (bounce + sector_ofs, buffer + bytes_written, chunk_size);
+          cache_write (sector_idx, bounce);
+        }
 
       /* Advance. */
       size -= chunk_size;
@@ -328,6 +362,7 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
       bytes_written += chunk_size;
     }
 
+  free (bounce);
   return bytes_written;
 }
 

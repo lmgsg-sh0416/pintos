@@ -2,6 +2,8 @@
 #include "devices/timer.h"
 #include "threads/thread.h"
 #include "threads/malloc.h"
+#include "threads/palloc.h"
+#include "threads/vaddr.h"
 #include "filesys/filesys.h"
 
 static struct cache *cache_pool;
@@ -19,11 +21,12 @@ void
 init_buffer_cache ()
 {
   uint32_t buffer_cache_size = CACHE_SIZE_LIMIT * sizeof (struct cache);
-//  uint32_t num_pages = buffer_cache_size / PGSIZE;
-//
-//  if (buffer_cache_size % PGSIZE != 0)
-//    num_pages++;
+  //uint32_t num_pages = buffer_cache_size / PGSIZE;
 
+  //if (buffer_cache_size % PGSIZE != 0)
+  //  num_pages++;
+
+  //cache_pool = palloc_get_multiple (num_pages, PAL_USER | PAL_ZERO);
   cache_pool = malloc (buffer_cache_size);
 
   list_init (&buffer_cache);
@@ -33,54 +36,70 @@ init_buffer_cache ()
   thread_create ("periodic_flush", PRI_MIN, periodic_flush, NULL);
 }
 
-uint8_t *
-get_buffer_cache (block_sector_t sector, bool is_write)
+void
+cache_read (block_sector_t sector, void *buffer)
 {
   struct cache *entry = NULL;
   block_sector_t *aux = NULL;
 
   lock_acquire (&cache_lock);
-  entry = fetch_buffer_cache (sector);
-  lock_release (&cache_lock);
 
+  entry = fetch_buffer_cache (sector);
   ASSERT (entry != NULL);
 
-  if (is_write)
-    entry->dirty = true;
-  else 
-    {
-      aux = malloc (sizeof *aux);
-      *aux = sector + 1;
-      thread_create ("read-ahead", PRI_MIN, read_ahead, aux);
-    }
+  memcpy (buffer, entry->data, BLOCK_SECTOR_SIZE);
 
-  lock_acquire (&cache_lock);
+  /* addition read process */
+  aux = malloc (sizeof *aux);
+  *aux = sector + 1;
+  thread_create ("read-ahead", PRI_MIN, read_ahead, aux);
+
   list_remove (&entry->elem);
   list_push_back (&buffer_cache, &entry->elem);
+  
   lock_release (&cache_lock);
+}
 
-  return entry->data;
+void
+cache_write (block_sector_t sector, void *buffer)
+{
+  struct cache *entry = NULL;
+  block_sector_t *aux = NULL;
+
+  lock_acquire (&cache_lock);
+
+  entry = fetch_buffer_cache (sector);
+  ASSERT (entry != NULL);
+  
+  memcpy (entry->data, buffer, BLOCK_SECTOR_SIZE);
+
+  /* addition write process */
+  entry->dirty = true;
+
+  list_remove (&entry->elem);
+  list_push_back (&buffer_cache, &entry->elem);
+  
+  lock_release (&cache_lock);
 }
 
 void
 flush_buffer_cache ()
 {
-  size_t i;
-
-  if (num_cache == 0)
-    {
-      return;
-    }
-
   lock_acquire (&cache_lock);
-  for (i = 0; i < CACHE_SIZE_LIMIT; i++)
+  if (list_empty (&buffer_cache))
+    return;
+  else
     {
-      struct cache *temp = &cache_pool[i];
-
-      if (temp->dirty)
+      struct list_elem *e;
+      for (e = list_begin (&buffer_cache); e != list_end (&buffer_cache);
+           e = list_next (e))
         {
-          block_write (fs_device, temp->sector, temp->data);
-          temp->dirty = false;
+          struct cache *temp = list_entry (e, struct cache, elem);
+          if (temp->dirty)
+            {
+              block_write (fs_device, temp->sector, temp->data);
+              temp->dirty = false;
+            }
         }
     }
   lock_release (&cache_lock);
@@ -91,28 +110,27 @@ search_buffer_cache (block_sector_t sector, struct cache **entry)
 {
   size_t i;
 
-  if (num_cache == 0)
+  if (list_empty (&buffer_cache))
     {
       *entry = NULL;
       return false;
     }
-
-  for (i = 0; i < CACHE_SIZE_LIMIT; i++)
+  else
     {
-      struct cache *temp = &cache_pool[i];
-
-      if (temp->sector == sector)
+      struct list_elem *e;
+      for (e = list_begin (&buffer_cache); e != list_end (&buffer_cache);
+           e = list_next (e))
         {
-          *entry = temp;
-          return true;
+          struct cache *temp = list_entry (e, struct cache, elem);
+          if (temp->sector == sector)
+            {
+              *entry = temp;
+              return true;
+            }
         }
-      
-      if (i == num_cache - 1)
-        break;
+      *entry = NULL;
+      return false;
     }
-
-  *entry = NULL;
-  return false;
 }
 
 static struct cache *
@@ -124,8 +142,6 @@ fetch_buffer_cache (block_sector_t sector)
   {
     if (num_cache == CACHE_SIZE_LIMIT)
       {
-        ASSERT (!list_empty (&buffer_cache));
-  
         struct cache *evicted = list_entry (list_front (&buffer_cache), struct cache, elem);
   
         if (evicted->dirty)
@@ -133,19 +149,16 @@ fetch_buffer_cache (block_sector_t sector)
         
         list_remove (&evicted->elem);
         entry = evicted;
-        num_cache--;
       }
     else
-      entry = &cache_pool[num_cache];
+      entry = &cache_pool[num_cache++];
 
     entry->sector = sector;
     entry->dirty = false;
   
     block_read (fs_device, entry->sector, entry->data);
     list_push_back (&buffer_cache, &entry->elem);
-    num_cache++;
   }
-
   return entry;
 }
 
