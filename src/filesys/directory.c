@@ -116,7 +116,7 @@ dir_get_inode (struct dir *dir)
    otherwise, returns false and ignores EP and OFSP. */
 static bool
 lookup (const struct dir *dir, const char *name,
-        struct dir_entry *ep, off_t *ofsp) 
+        struct dir_entry *ep, off_t *ofsp, bool *is_directory) 
 {
   struct dir_entry e;
   size_t ofs;
@@ -132,6 +132,8 @@ lookup (const struct dir *dir, const char *name,
           *ep = e;
         if (ofsp != NULL)
           *ofsp = ofs;
+        if (is_directory != NULL)
+          *is_directory = e.is_directory;
         return true;
       }
   return false;
@@ -150,10 +152,45 @@ dir_lookup (const struct dir *dir, const char *name,
   ASSERT (dir != NULL);
   ASSERT (name != NULL);
 
-  if (lookup (dir, name, &e, NULL))
+  if (lookup (dir, name, &e, NULL, NULL))
     *inode = inode_open (e.inode_sector);
   else
     *inode = NULL;
+
+  return *inode != NULL;
+}
+
+/* Multi version of dir_lookup all entry must be directory */
+bool
+dir_multi_lookup (const struct dir *dir, const char *name,
+            struct inode **inode) 
+{
+  struct dir_entry e;
+  struct dir *target;
+  char *token, *save_ptr;
+  bool is_directory;
+
+  ASSERT (dir != NULL);
+  ASSERT (name != NULL);
+
+  target = dir_reopen (dir->inode);
+  // path trace
+  for (token = strtok_r (name, "/", &save_ptr); token != NULL;
+       token = strtok_r (NULL, "/", &save_ptr))
+    {
+      struct inode *sub_inode;
+      if (lookup (target, token, &e, NULL, &is_directory) &&
+          is_directory == true)
+        *inode = inode_open (e.inode_sector);
+      else
+        {
+          *inode = NULL;
+          break;
+        }
+      dir_close (target);
+      target = dir_open (*inode);
+    }
+  dir_close (target);
 
   return *inode != NULL;
 }
@@ -179,7 +216,7 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector, bool is
     return false;
 
   /* Check that NAME is not in use. */
-  if (lookup (dir, name, NULL, NULL))
+  if (lookup (dir, name, NULL, NULL, NULL))
     goto done;
 
   /* Set OFS to offset of free slot.
@@ -220,7 +257,7 @@ dir_remove (struct dir *dir, const char *name)
   ASSERT (name != NULL);
 
   /* Find directory entry. */
-  if (!lookup (dir, name, &e, &ofs))
+  if (!lookup (dir, name, &e, &ofs, NULL))
     goto done;
 
   /* Open inode. */

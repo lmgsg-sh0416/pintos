@@ -1,18 +1,19 @@
-#include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
 #include <user/syscall.h>
+#include "devices/shutdown.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/malloc.h"
 #include "threads/vaddr.h"
 #include "userprog/process.h"
 #include "userprog/pagedir.h"
-#include "devices/shutdown.h"
-#include "filesys/filesys.h"
-#include "filesys/file.h"
+#include "userprog/syscall.h"
 #include "vm/frame.h"
 #include "vm/page.h"
+#include "filesys/filesys.h"
+#include "filesys/file.h"
+#include "filesys/directory.h"
 
 static void syscall_handler (struct intr_frame *);
 
@@ -281,7 +282,6 @@ syscall_exec (struct intr_frame *f, const char *cmd_line)
   tid_t result;
   if (!validate_user_memory (f, cmd_line, false))
     {
-      printf ("exec fail\n");
       cur->process->exit_status = -1;
       thread_exit();
       return -1;
@@ -303,7 +303,6 @@ syscall_create (struct intr_frame *f, const char *name, int32_t size)
   
   if (!validate_user_memory (f, name, false))
     {
-      printf ("create fail\n");
       cur->process->exit_status = -1;
       thread_exit();
       return -1;
@@ -345,7 +344,6 @@ syscall_open (struct intr_frame *f, const char *name)
 
   if (!validate_user_memory (f, name, false))
     {
-      printf ("open fail\n");
       cur->exit_status = -1;
       thread_exit ();
       return -1;
@@ -616,6 +614,156 @@ syscall_tell (int fd)
   return pos;
 }
 
+static bool 
+syscall_chdir (struct intr_frame *f, const char *dir)
+{
+  struct thread *cur = thread_current ();
+  struct dir *target;
+  struct inode *target_inode;
+  char *temp = dir-1;
+  bool result = true;
+
+  // pin
+  do{
+      temp++;
+      if (!validate_user_memory (f, temp, false))
+        {
+          cur->process->exit_status = -1;
+          thread_exit ();
+        }
+    } while (*temp);
+  
+  // find target directory
+  if (dir[0] == '/')    // absolute
+    {
+      target = dir_open_root ();
+      result = dir_multi_lookup (target, dir+1, &target_inode);
+    }
+  else                  // relative
+    {
+      target = dir_reopen (cur->process->dir);
+      result = dir_multi_lookup (target, dir, &target_inode);
+    }
+  dir_close (target);
+
+  // change process's current directory
+  if (result)
+    {
+      target = dir_open (target_inode);
+      dir_close (cur->process->dir);
+      cur->process->dir = target;
+    }
+
+  // unpin
+  temp = dir-1;
+  do{
+      temp++;
+      unpin_frame (cur->pagedir, temp);
+    } while (*temp);
+  return result;
+}
+
+static bool 
+syscall_mkdir (struct intr_frame *f, const char *dir)
+{
+  struct thread *cur = thread_current ();
+  struct dir *target;
+  char *temp = dir-1, *directory_name;
+  struct inode *target_inode;
+  bool result = true;
+
+  // pin
+  do{
+      temp++;
+      if (!validate_user_memory (f, temp, false))
+        {
+          cur->process->exit_status = -1;
+          thread_exit ();
+        }
+    } while (*temp);
+  
+  // split last
+  directory_name = strrchr (dir, '/');
+  if (directory_name)
+    {
+      *directory_name = '\0';
+      directory_name++;
+    }
+  else
+    directory_name = dir;
+
+  // find target directory
+  if (dir[0] == '/')    // absolute
+    {
+      target = dir_open_root ();
+      result = dir_multi_lookup (target, dir+1, &target_inode);
+    }
+  else                  // relative
+    {
+      target = dir_reopen (cur->process->dir);
+      result = dir_multi_lookup (target, dir, &target_inode);
+    }
+  dir_close (target);
+
+  // make directory
+  if (result)
+    {
+      block_sector_t new_directory_sector;
+      // create directory in terms of inode
+      result = free_map_allocate (1, &new_directory_sector) &&
+                dir_create (new_directory_sector, 16);
+      // add new directory entry into current directory
+      if (result)
+        {
+          target = dir_open (target_inode);
+          result = dir_add (target, directory_name, new_directory_sector, true);
+        }
+    }
+
+  // unpin
+  temp = dir-1;
+  do{
+      temp++;
+      unpin_frame (cur->pagedir, temp);
+    } while (*temp);
+  return result;
+}
+
+static bool 
+syscall_readdir (struct intr_frame *f, int fd, char *name)
+{
+  struct thread *cur = thread_current ();
+  int i;
+  // pin
+  for(i=0; i<READDIR_MAX_LEN+1; i++)
+    {
+      if (!validate_user_memory (f, name+i, true))
+        {
+          cur->process->exit_status = -1;
+          thread_exit ();
+        }
+    }
+  // Need to implement 
+  // unpin
+  for(i=0; i<READDIR_MAX_LEN+1; i++)
+    {
+      unpin_frame (cur->pagedir, name+i);
+    }
+  return false;
+}
+
+static bool 
+syscall_isdir (struct intr_frame *f, int fd)
+{
+  return false;
+}
+
+static int
+syscall_inumber (struct intr_frame *f, int fd)
+{
+  return 0;
+}
+
 static void
 syscall_handler (struct intr_frame *f) 
 {
@@ -647,6 +795,7 @@ syscall_handler (struct intr_frame *f)
     case SYS_CREATE:
     case SYS_SEEK:
     case SYS_MMAP:
+    case SYS_READDIR:
       if (!validate_user_memory (f, f->esp+8, false))
       {
         cur->process->exit_status = -1;
@@ -662,6 +811,10 @@ syscall_handler (struct intr_frame *f)
     case SYS_TELL:
     case SYS_CLOSE:
     case SYS_MUNMAP:
+    case SYS_CHDIR:
+    case SYS_MKDIR:
+    case SYS_ISDIR:
+    case SYS_INUMBER:
       if (!validate_user_memory (f, f->esp+4, false))
       {
         cur->process->exit_status = -1;
@@ -736,6 +889,27 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_MUNMAP:
       syscall_munmap (f, *(mapid_t *)(f->esp + 4));
+      unpin_frame (cur->pagedir, f->esp+4);
+      break;
+    case SYS_CHDIR:
+      f->eax = syscall_chdir (f, *((char **)(f->esp + 4)));
+      unpin_frame (cur->pagedir, f->esp+4);
+      break;
+    case SYS_MKDIR:
+      f->eax = syscall_mkdir (f, *((char **)(f->esp + 4)));
+      unpin_frame (cur->pagedir, f->esp+4);
+      break;
+    case SYS_READDIR:
+      f->eax = syscall_readdir (f, *(int *)(f->esp + 4), *((char **)(f->esp + 8)));
+      unpin_frame (cur->pagedir, f->esp+4);
+      unpin_frame (cur->pagedir, f->esp+8);
+      break;
+    case SYS_ISDIR:
+      f->eax = syscall_isdir (f, *(int *)(f->esp + 4));
+      unpin_frame (cur->pagedir, f->esp+4);
+      break;
+    case SYS_INUMBER:
+      f->eax = syscall_inumber (f, *(int *)(f->esp + 4));
       unpin_frame (cur->pagedir, f->esp+4);
       break;
     default:
