@@ -1,10 +1,12 @@
-#include "filesys/directory.h"
 #include <stdio.h>
 #include <string.h>
 #include <list.h>
+#include "threads/thread.h"
+#include "threads/malloc.h"
+#include "userprog/process.h"
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
-#include "threads/malloc.h"
+#include "filesys/directory.h"
 
 /* A directory. */
 struct dir 
@@ -18,6 +20,7 @@ struct dir_entry
   {
     block_sector_t inode_sector;        /* Sector number of header. */
     char name[NAME_MAX + 1];            /* Null terminated file name. */
+    bool is_directory;                  /* Is directory? */
     bool in_use;                        /* In use or free? */
   };
 
@@ -26,7 +29,30 @@ struct dir_entry
 bool
 dir_create (block_sector_t sector, size_t entry_cnt)
 {
-  return inode_create (sector, entry_cnt * sizeof (struct dir_entry));
+  struct thread *cur = thread_current ();
+  // size is fixed need to implemented
+  if (inode_create (sector, entry_cnt * sizeof (struct dir_entry)))
+    {
+      struct inode *inode = inode_open (sector);
+      struct dir *dir = dir_open (inode);
+      bool result = false;
+      if (sector == ROOT_DIR_SECTOR)      // execute while pintos setup
+        {
+          if (dir_add (dir, ".", ROOT_DIR_SECTOR, true) &&
+              dir_add (dir, "..", ROOT_DIR_SECTOR, true))
+            result = true;
+        }
+      else                                // execute while system call
+        {
+          if (dir_add (dir, ".", inode_get_inumber(dir->inode), true) &&
+              dir_add (dir, "..", inode_get_inumber(cur->process->dir->inode), true))
+            result = true;
+        }
+      dir_close (dir);
+      inode_close (inode);
+      return result;
+    }
+  return false;
 }
 
 /* Opens and returns the directory for the given INODE, of which
@@ -139,7 +165,7 @@ dir_lookup (const struct dir *dir, const char *name,
    Fails if NAME is invalid (i.e. too long) or a disk or memory
    error occurs. */
 bool
-dir_add (struct dir *dir, const char *name, block_sector_t inode_sector)
+dir_add (struct dir *dir, const char *name, block_sector_t inode_sector, bool is_directory)
 {
   struct dir_entry e;
   off_t ofs;
@@ -170,6 +196,7 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector)
 
   /* Write slot. */
   e.in_use = true;
+  e.is_directory = is_directory;
   strlcpy (e.name, name, sizeof e.name);
   e.inode_sector = inode_sector;
   success = inode_write_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
@@ -200,6 +227,17 @@ dir_remove (struct dir *dir, const char *name)
   inode = inode_open (e.inode_sector);
   if (inode == NULL)
     goto done;
+
+  /* If directory, check empty */
+  if (e.is_directory)
+    {
+      struct dir *target = dir_open (inode);
+      char buf[NAME_MAX + 1];
+      while (dir_readdir (target, buf))
+        if ((strcmp (buf, ".") != 0) && (strcmp (buf, "..") != 0))
+          goto done;
+      dir_close (target);
+    }
 
   /* Erase directory entry. */
   e.in_use = false;
