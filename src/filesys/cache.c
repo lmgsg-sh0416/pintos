@@ -1,5 +1,6 @@
 #include "filesys/cache.h"
 #include <string.h>
+#include "threads/palloc.h"
 #include "devices/timer.h"
 #include "threads/vaddr.h"
 #include "threads/thread.h"
@@ -21,13 +22,16 @@ void
 init_buffer_cache ()
 {
   uint32_t buffer_cache_size = CACHE_SIZE_LIMIT * sizeof (struct cache);
-  cache_pool = malloc (buffer_cache_size);
+  int num = buffer_cache_size / PGSIZE;
+  if (buffer_cache_size % PGSIZE)
+    num++;
+  //cache_pool = palloc_get_multiple (num, PAL_USER | PAL_ZERO);
 
   list_init (&buffer_cache);
   lock_init (&cache_lock);
   num_cache = 0;
 
-  thread_create ("periodic_flush", PRI_MIN, periodic_flush, NULL);
+  //thread_create ("periodic_flush", PRI_MIN, periodic_flush, NULL);
 }
 
 void
@@ -46,7 +50,7 @@ cache_read (block_sector_t sector, void *buffer)
   /* addition read process */
   aux = malloc (sizeof *aux);
   *aux = sector + 1;
-  thread_create ("read-ahead", PRI_MIN, read_ahead, aux);
+  //thread_create ("read-ahead", PRI_MIN, read_ahead, aux);
 
   list_remove (&entry->elem);
   list_push_back (&buffer_cache, &entry->elem);

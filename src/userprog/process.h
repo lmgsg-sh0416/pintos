@@ -9,6 +9,8 @@ struct file_desc
   {
     int num;
     struct file *file;
+    struct dir *dir;
+    bool is_directory;
     struct list_elem elem;
   };
 

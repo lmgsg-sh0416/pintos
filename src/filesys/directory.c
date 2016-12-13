@@ -146,14 +146,14 @@ lookup (const struct dir *dir, const char *name,
    a null pointer.  The caller must close *INODE. */
 bool
 dir_lookup (const struct dir *dir, const char *name,
-            struct inode **inode) 
+            struct inode **inode, bool *is_directory) 
 {
   struct dir_entry e;
 
   ASSERT (dir != NULL);
   ASSERT (name != NULL);
 
-  if (lookup (dir, name, &e, NULL, NULL))
+  if (lookup (dir, name, &e, NULL, is_directory))
     *inode = inode_open (e.inode_sector);
   else
     *inode = NULL;
@@ -163,41 +163,45 @@ dir_lookup (const struct dir *dir, const char *name,
 
 /* Multi version of dir_lookup all entry must be directory */
 bool
-dir_multi_lookup (const struct dir *dir, const char *name,
-            struct inode **inode) 
+dir_multi_lookup (const struct dir **dir, const char *name) 
 {
   struct dir_entry e;
-  struct dir *target;
+  struct dir *target, *target2;
+  struct inode *inode;
   char *token, *save_ptr;
   bool is_directory;
 
   ASSERT (dir != NULL);
   ASSERT (name != NULL);
 
-  //printf("start directory: %d\n", inode_get_inumber (dir->inode));
-  target = dir_reopen (dir);
+  target = *dir;
   // path trace
   for (token = strtok_r (name, "/", &save_ptr); token != NULL;
        token = strtok_r (NULL, "/", &save_ptr))
     {
-      //printf("token: %s\n", token);
-      if (lookup (target, token, &e, NULL, &is_directory) &&
-          is_directory == true)
+      if (strlen(token) == 0)
+        continue;
+      //printf("[dir_multi_lookup] - current sector: %d token: %s\n", inode_get_inumber (dir_get_inode (target)), token);
+      if (lookup (target, token, &e, NULL, &is_directory) && is_directory == true)
         {
-          //printf("in progress: %d sector: %d\n", inode_get_inumber (dir->inode), e.inode_sector);
-          *inode = inode_open (e.inode_sector);
+          //printf("[dir_multi_lookup] - in progress: %d sector: %d\n", inode_get_inumber (target->inode), e.inode_sector);
+          inode = inode_open (e.inode_sector);
         }
       else
         {
-          *inode = NULL;
-          break;
+          *dir = target;
+          return false;
         }
+      if (inode == NULL)
+        printf("malloc fail\n");
+      /* Advance. */
+      target2 = dir_open (inode);
       dir_close (target);
-      target = dir_open (*inode);
+      target = target2;
     }
-  dir_close (target);
-
-  return *inode != NULL;
+  *dir = target;
+  //printf("[dir_multi_lookup] - sector: %d end\n", inode_get_inumber (dir_get_inode (*dir)));
+  return true;
 }
 
 /* Adds a file named NAME to DIR, which must not already contain a
@@ -242,7 +246,7 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector, bool is
   strlcpy (e.name, name, sizeof e.name);
   e.inode_sector = inode_sector;
   success = inode_write_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
-  //printf("current: %d %s %d end\n", inode_get_inumber (dir->inode), name, inode_sector);
+  //printf("[dir_add] - current: %d %s %d end\n", inode_get_inumber (dir->inode), name, inode_sector);
 
  done:
   return success;
