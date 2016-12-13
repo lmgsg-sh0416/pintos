@@ -177,6 +177,8 @@ inode_open (block_sector_t sector)
       inode = list_entry (e, struct inode, elem);
       if (inode->sector == sector) 
         {
+          if (inode->removed)
+            return NULL;
           inode_reopen (inode);
           return inode; 
         }
@@ -259,6 +261,9 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
   off_t bytes_read = 0;
   uint8_t *bounce = NULL;
 
+  if (inode->removed)
+    return 0;
+
   while (size > 0) 
     {
       /* Disk sector to read, starting byte offset within sector. */
@@ -318,7 +323,7 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
   off_t bytes_written = 0;
   uint8_t *bounce = NULL;
 
-  if (inode->deny_write_cnt)
+  if (inode->deny_write_cnt || inode->removed)
     return 0;
 
   while (size > 0) 

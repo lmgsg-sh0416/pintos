@@ -141,8 +141,7 @@ syscall_mmap (struct intr_frame *f, int fd, void *addr)
   else
     {
       int mid = 0;
-      for (e = list_begin (&cur->process->file_mapped);
-           e != list_end (&cur->process->file_mapped);
+      for (e = list_begin (&cur->process->file_mapped); e != list_end (&cur->process->file_mapped);
            e = list_next (e))
         {
           struct mmap_file *mfe = list_entry (e, struct mmap_file, elem);
@@ -378,20 +377,28 @@ syscall_open (struct intr_frame *f, const char *name)
 
   fd = malloc (sizeof (*fd));
   fd->num = -1;
+  fd->dir = fd->file = NULL;
 
   lock_acquire (&fs_lock);
   dir = trace_dir (name, &real_name);
   if (dir)
     {
-      bool is_directory;
+      bool is_directory = true;
       struct inode *inode;
-      if (dir_lookup (dir, real_name, &inode, &is_directory))
+      bool result = true;
+      if (strlen (real_name) == 0)
+        is_directory = true;
+      else
+        result = dir_lookup (dir, real_name, &inode, &is_directory);
+      if (result)
         {
           if (is_directory)
             fd->dir = dir_open (inode);
           else
-            fd->file = filesys_open (real_name, dir);
+            fd->file = file_open (inode);
+          //printf("file: %x\n", fd->file);
           fd->is_directory = is_directory;
+  //printf("OPEN WITH dir %x file %x is_directory %d\n", fd->dir, fd->file, is_directory);
         }
       dir_close (dir);
     }
@@ -427,6 +434,7 @@ syscall_open (struct intr_frame *f, const char *name)
 
   for (temp = name; *temp; temp++)
     unpin_frame (cur->pagedir, temp);
+  //printf("OPEN END WITH FD %d dir %x file %x\n", fd->num, fd->dir, fd->file);
   return fd->num;
 }
 
@@ -672,7 +680,7 @@ syscall_chdir (struct intr_frame *f, const char *dir)
   struct thread *cur = thread_current ();
   struct dir *target;
   struct inode *target_inode;
-  char *temp;
+  char *temp, *dir_name;
   bool result = true;
 
   for (temp = dir; *temp; temp++)
@@ -682,22 +690,28 @@ syscall_chdir (struct intr_frame *f, const char *dir)
         thread_exit ();
       }
   
+  dir_name = malloc (strlen (dir) + 1);
+  memcpy (dir_name, dir, strlen (dir));
+  dir_name[strlen (dir)] = '\0';
   // find target directory
   if (dir[0] == '/')    // absolute
     {
       target = dir_open_root ();
-      result = dir_multi_lookup (&target, dir+1);
+      result = dir_multi_lookup (&target, dir_name+1);
     }
   else                  // relative
     {
       target = dir_reopen (cur->process->dir);
-      result = dir_multi_lookup (&target, dir);
+      result = dir_multi_lookup (&target, dir_name);
     }
+  free (dir_name);
   // change process's current directory
   if (result)
     {
+      lock_acquire (&fs_lock);
       dir_close (cur->process->dir);
       cur->process->dir = target;
+      lock_release (&fs_lock);
     }
 
   for (temp = dir; *temp; temp++)
@@ -752,6 +766,9 @@ static bool
 syscall_readdir (struct intr_frame *f, int fd, char *name)
 {
   struct thread *cur = thread_current ();
+  struct file_desc *fde;
+  struct list_elem *e;
+  bool result;
   int i;
   // pin
   for(i=0; i<READDIR_MAX_LEN+1; i++)
@@ -762,25 +779,76 @@ syscall_readdir (struct intr_frame *f, int fd, char *name)
           thread_exit ();
         }
     }
-  // Need to implement 
+
+  if (list_empty (&cur->process->fd_table))
+    return false;
+  for (e = list_begin (&cur->process->fd_table); e != list_end (&cur->process->fd_table); 
+       e = list_next (e))
+    {
+      fde = list_entry (e, struct file_desc, elem);
+      if (fde->num == fd && fde->is_directory == true)
+        break;
+    }
+  if (e == list_end (&cur->process->fd_table))
+    return false;
+
+  result = dir_readdir (fde->dir, name);
+  while (result && 
+          (strcmp (name, ".") == 0 || strcmp (name, "..") == 0))
+    result = dir_readdir (fde->dir, name);
+
   // unpin
   for(i=0; i<READDIR_MAX_LEN+1; i++)
     {
       unpin_frame (cur->pagedir, name+i);
     }
-  return false;
+  return result;
 }
 
 static bool 
 syscall_isdir (struct intr_frame *f, int fd)
 {
-  return false;
+  struct thread *cur = thread_current ();
+  struct file_desc *fde;
+  struct list_elem *e;
+
+  if (list_empty (&cur->process->fd_table))
+    return false;
+  for (e = list_begin (&cur->process->fd_table); e != list_end (&cur->process->fd_table); 
+       e = list_next (e))
+    {
+      fde = list_entry (e, struct file_desc, elem);
+      if (fde->num == fd)
+        break;
+    }
+  if (e == list_end (&cur->process->fd_table))
+    return false;
+
+  return fde->is_directory;
 }
 
 static int
 syscall_inumber (struct intr_frame *f, int fd)
 {
-  return 0;
+  struct thread *cur = thread_current ();
+  struct file_desc *fde;
+  struct list_elem *e;
+
+  if (list_empty (&cur->process->fd_table))
+    return -1;
+  for (e = list_begin (&cur->process->fd_table); e != list_end (&cur->process->fd_table); 
+       e = list_next (e))
+    {
+      fde = list_entry (e, struct file_desc, elem);
+      if (fde->num == fd)
+        break;
+    }
+  if (e == list_end (&cur->process->fd_table))
+    return -1;
+  if (fde->is_directory)
+    return inode_get_inumber (dir_get_inode (fde->dir));
+  else
+    return inode_get_inumber (file_get_inode (fde->file));
 }
 
 static void
