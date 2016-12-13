@@ -13,6 +13,7 @@
 #include "vm/page.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#include "filesys/inode.h"
 #include "filesys/directory.h"
 
 static void syscall_handler (struct intr_frame *);
@@ -309,7 +310,7 @@ syscall_create (struct intr_frame *f, const char *name, int32_t size)
     }
 
   lock_acquire (&fs_lock);
-  result = filesys_create (name, size);
+  result = filesys_create (name, size, cur->process->dir);
   lock_release (&fs_lock);
   unpin_frame (cur->pagedir, name);
   return result;
@@ -669,6 +670,7 @@ syscall_mkdir (struct intr_frame *f, const char *dir)
   struct thread *cur = thread_current ();
   struct dir *target;
   char *temp = dir-1, *directory_name;
+  int len;
   struct inode *target_inode;
   bool result = true;
 
@@ -682,42 +684,59 @@ syscall_mkdir (struct intr_frame *f, const char *dir)
         }
     } while (*temp);
   
-  // split last
+  len = strlen (dir);
+
+  // find name of directory
   directory_name = strrchr (dir, '/');
-  if (directory_name)
+  if (!directory_name)              // special case: no slash
+  {
+    target = dir_reopen (cur->process->dir);
+    directory_name = dir;
+  }
+  else if(directory_name == dir)    // special case: create in root
+  {
+    target = dir_open_root ();
+    directory_name++;
+  }
+  else                              // general case
     {
-      *directory_name = '\0';
+      temp = malloc (directory_name - dir + 2);
+      memcpy (temp, dir, directory_name - dir + 1);
+      temp[directory_name - dir + 1] = '\0';
+      // find target directory
+      if (dir[0] == '/')    // absolute
+        {
+          target = dir_open_root ();
+          //printf("absolute multi lookup start\n\n");
+          result = dir_multi_lookup (target, temp+1, &target_inode);
+        }
+      else                  // relative
+        {
+          target = dir_reopen (cur->process->dir);
+          result = dir_multi_lookup (target, temp, &target_inode);
+        }
+      dir_close (target);
+      if (result)
+        target = dir_open (target_inode);
       directory_name++;
     }
-  else
-    directory_name = dir;
-
-  // find target directory
-  if (dir[0] == '/')    // absolute
-    {
-      target = dir_open_root ();
-      result = dir_multi_lookup (target, dir+1, &target_inode);
-    }
-  else                  // relative
-    {
-      target = dir_reopen (cur->process->dir);
-      result = dir_multi_lookup (target, dir, &target_inode);
-    }
-  dir_close (target);
 
   // make directory
   if (result)
     {
       block_sector_t new_directory_sector;
+      struct dir *child_dir;
       // create directory in terms of inode
       result = free_map_allocate (1, &new_directory_sector) &&
                 dir_create (new_directory_sector, 16);
+      child_dir = dir_open (inode_open (new_directory_sector));
       // add new directory entry into current directory
       if (result)
-        {
-          target = dir_open (target_inode);
-          result = dir_add (target, directory_name, new_directory_sector, true);
-        }
+      {
+        result = dir_add (target, directory_name, new_directory_sector, true) &&
+                  dir_add (child_dir, "..", inode_get_inumber (dir_get_inode (target)), true);
+      }
+      dir_close (target);
     }
 
   // unpin
@@ -726,6 +745,7 @@ syscall_mkdir (struct intr_frame *f, const char *dir)
       temp++;
       unpin_frame (cur->pagedir, temp);
     } while (*temp);
+  //printf("mkdir end!!!!\n\n\n\n");
   return result;
 }
 

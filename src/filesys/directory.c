@@ -44,8 +44,7 @@ dir_create (block_sector_t sector, size_t entry_cnt)
         }
       else                                // execute while system call
         {
-          if (dir_add (dir, ".", inode_get_inumber(dir->inode), true) &&
-              dir_add (dir, "..", inode_get_inumber(cur->process->dir->inode), true))
+          if (dir_add (dir, ".", inode_get_inumber(dir->inode), true))
             result = true;
         }
       dir_close (dir);
@@ -124,10 +123,12 @@ lookup (const struct dir *dir, const char *name,
   ASSERT (dir != NULL);
   ASSERT (name != NULL);
 
+  //printf ("current lookup: %d\n", inode_get_inumber (dir->inode));
   for (ofs = 0; inode_read_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
        ofs += sizeof e)
     if (e.in_use && !strcmp (name, e.name)) 
       {
+        //printf("found lookup sector: %s %d\n", e.name, e.inode_sector);
         if (ep != NULL)
           *ep = e;
         if (ofsp != NULL)
@@ -173,15 +174,19 @@ dir_multi_lookup (const struct dir *dir, const char *name,
   ASSERT (dir != NULL);
   ASSERT (name != NULL);
 
-  target = dir_reopen (dir->inode);
+  //printf("start directory: %d\n", inode_get_inumber (dir->inode));
+  target = dir_reopen (dir);
   // path trace
   for (token = strtok_r (name, "/", &save_ptr); token != NULL;
        token = strtok_r (NULL, "/", &save_ptr))
     {
-      struct inode *sub_inode;
+      //printf("token: %s\n", token);
       if (lookup (target, token, &e, NULL, &is_directory) &&
           is_directory == true)
-        *inode = inode_open (e.inode_sector);
+        {
+          //printf("in progress: %d sector: %d\n", inode_get_inumber (dir->inode), e.inode_sector);
+          *inode = inode_open (e.inode_sector);
+        }
       else
         {
           *inode = NULL;
@@ -237,6 +242,7 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector, bool is
   strlcpy (e.name, name, sizeof e.name);
   e.inode_sector = inode_sector;
   success = inode_write_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
+  //printf("current: %d %s %d end\n", inode_get_inumber (dir->inode), name, inode_sector);
 
  done:
   return success;

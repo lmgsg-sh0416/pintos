@@ -80,7 +80,10 @@ flush_buffer_cache ()
 {
   lock_acquire (&cache_lock);
   if (list_empty (&buffer_cache))
-    return;
+    {
+      lock_release (&cache_lock);
+      return;
+    }
   else
     {
       struct list_elem *e;
@@ -148,7 +151,7 @@ fetch_buffer_cache (block_sector_t sector)
 
       entry->sector = sector;
       entry->dirty = false;
-    
+      
       block_read (fs_device, entry->sector, entry->data);
       list_push_back (&buffer_cache, &entry->elem);
     }
