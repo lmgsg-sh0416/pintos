@@ -52,7 +52,7 @@ init_frame_table (uint32_t ram_size)
   uint32_t frame_table_size;
   frame_entry_num = ram_size/4;
   frame_table_size = frame_entry_num * sizeof (struct frame_entry);
-  frame_table = palloc_get_multiple (frame_table_size/PGSIZE, PAL_USER | PAL_ZERO);
+  frame_table = palloc_get_multiple (PAL_ASSERT | PAL_USER | PAL_ZERO, frame_table_size/PGSIZE);
   frame_head = 0;
   lock_init (&frame_lock);
 }

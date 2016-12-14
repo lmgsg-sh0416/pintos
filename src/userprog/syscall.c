@@ -701,6 +701,7 @@ syscall_chdir (struct intr_frame *f, const char *dir)
         thread_exit ();
       }
   
+  lock_acquire (&fs_lock);
   dir_name = malloc (strlen (dir) + 1);
   memcpy (dir_name, dir, strlen (dir));
   dir_name[strlen (dir)] = '\0';
@@ -719,11 +720,10 @@ syscall_chdir (struct intr_frame *f, const char *dir)
   // change process's current directory
   if (result)
     {
-      lock_acquire (&fs_lock);
       dir_close (cur->process->dir);
       cur->process->dir = target;
-      lock_release (&fs_lock);
     }
+  lock_release (&fs_lock);
 
   for (temp = dir; *temp; temp++)
     unpin_frame (cur->pagedir, temp);
@@ -746,6 +746,7 @@ syscall_mkdir (struct intr_frame *f, const char *dir)
         thread_exit ();
       }
   
+  lock_acquire (&fs_lock);
   target = trace_dir (dir, &directory_name);
 
   if (target)
@@ -766,6 +767,7 @@ syscall_mkdir (struct intr_frame *f, const char *dir)
       dir_close (child_dir);
       dir_close (target);
     }
+  lock_release (&fs_lock);
 
   for (temp = dir; *temp; temp++)
     unpin_frame (cur->pagedir, temp);
