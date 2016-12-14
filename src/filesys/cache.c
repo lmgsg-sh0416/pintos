@@ -132,7 +132,7 @@ cache_read (block_sector_t sector, void *buffer)
 //  aux = malloc (sizeof *aux);
 //  if (aux != NULL)
 //    {
-//      *aux = sector + 1;
+//      *aux = (sector + 1) % block_size (fs_device);
 //      thread_create ("read-ahead", PRI_MIN, read_ahead, aux);
 //    }
 }
