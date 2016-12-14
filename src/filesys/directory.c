@@ -153,6 +153,9 @@ dir_lookup (const struct dir *dir, const char *name,
   ASSERT (dir != NULL);
   ASSERT (name != NULL);
 
+  if (inode_get_removed (dir->inode))
+    return false;
+
   if (lookup (dir, name, &e, NULL, is_directory))
     *inode = inode_open (e.inode_sector);
   else
@@ -181,6 +184,11 @@ dir_multi_lookup (const struct dir **dir, const char *name)
     {
       if (strlen(token) == 0)
         continue;
+      if (inode_get_removed (target->inode))
+      {
+        *dir = target;
+        return false;
+      }
       //printf("[dir_multi_lookup] - current sector: %d token: %s\n", inode_get_inumber (dir_get_inode (target)), token);
       if (lookup (target, token, &e, NULL, &is_directory) && is_directory == true)
         {
@@ -222,6 +230,9 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector, bool is
 
   /* Check NAME for validity. */
   if (*name == '\0' || strlen (name) > NAME_MAX)
+    return false;
+
+  if (inode_get_removed (dir->inode))
     return false;
 
   /* Check that NAME is not in use. */
@@ -307,6 +318,9 @@ bool
 dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
 {
   struct dir_entry e;
+
+  if (inode_get_removed (dir->inode))
+    return false;
 
   while (inode_read_at (dir->inode, &e, sizeof e, dir->pos) == sizeof e) 
     {

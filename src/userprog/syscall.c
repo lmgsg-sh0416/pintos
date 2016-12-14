@@ -374,6 +374,9 @@ syscall_open (struct intr_frame *f, const char *name)
         thread_exit ();
       }
 
+  if (strlen (name) == 0)
+    return -1;
+
   fd = malloc (sizeof (*fd));
   fd->num = -1;
   fd->dir = fd->file = NULL;

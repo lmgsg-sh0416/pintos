@@ -336,6 +336,12 @@ inode_get_inumber (const struct inode *inode)
   return inode->sector;
 }
 
+bool
+inode_get_removed (const struct inode *inode)
+{
+  return inode->removed;
+}
+
 /* Closes INODE and writes it to disk.
    If this was the last reference to INODE, frees its memory.
    If INODE was also a removed inode, frees its blocks. */
@@ -428,9 +434,6 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
   off_t bytes_read = 0;
   uint8_t *bounce = NULL;
 
-  if (inode->removed)
-    return 0;
-
   while (size > 0) 
     {
       /* Disk sector to read, starting byte offset within sector. */
@@ -494,7 +497,7 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
   off_t bytes_written = 0;
   uint8_t *bounce = NULL;
 
-  if (inode->deny_write_cnt || inode->removed)
+  if (inode->deny_write_cnt)
     return 0;
 
   if (inode->data.length < offset + size)
