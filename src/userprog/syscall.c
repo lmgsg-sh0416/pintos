@@ -379,6 +379,13 @@ syscall_open (struct intr_frame *f, const char *name)
   fd->dir = fd->file = NULL;
 
   lock_acquire (&fs_lock);
+  if (strcmp (name, "/") == 0)
+  {
+    fd->dir = dir_open_root ();
+    fd->is_directory = true;
+  }
+  else
+  {
   dir = trace_dir (name, &real_name);
   if (dir)
     {
@@ -391,6 +398,7 @@ syscall_open (struct intr_frame *f, const char *name)
         result = dir_lookup (dir, real_name, &inode, &is_directory);
       if (result)
         {
+          //printf("while OPEN: %d NAME: %s \n", inode_get_inumber(inode), name);
           if (is_directory)
             fd->dir = dir_open (inode);
           else
@@ -401,6 +409,7 @@ syscall_open (struct intr_frame *f, const char *name)
         }
       dir_close (dir);
     }
+  }
   lock_release (&fs_lock);
   if ((fd->is_directory && fd->dir == NULL) ||
       (!fd->is_directory && fd->file == NULL))
@@ -845,9 +854,15 @@ syscall_inumber (struct intr_frame *f, int fd)
   if (e == list_end (&cur->process->fd_table))
     return -1;
   if (fde->is_directory)
+  {
+    //printf("inumber: %d\n",inode_get_inumber (dir_get_inode (fde->dir)));
     return inode_get_inumber (dir_get_inode (fde->dir));
+  }
   else
+  {
+    //printf("file inumber: %d\n",inode_get_inumber (file_get_inode (fde->file)));
     return inode_get_inumber (file_get_inode (fde->file));
+  }
 }
 
 static void

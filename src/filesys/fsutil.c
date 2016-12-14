@@ -11,6 +11,45 @@
 #include "threads/palloc.h"
 #include "threads/vaddr.h"
 
+static struct dir*
+trace_dir (const char *name, char **real_name)
+{
+  struct dir *target;
+  struct inode *target_inode;
+  char *dir_name, *real_name_;
+  bool result = true;
+  // find name of directory
+  real_name_ = strrchr (name, '/');
+  if (!real_name_)              // special case: no slash
+    {
+      target = dir_open_root ();
+      real_name_ = name;
+    }
+  else if(real_name_ == name)    // special case: create in root
+    {
+      target = dir_open_root ();
+      real_name_++;
+    }
+  else                         // general case
+    {
+      dir_name = malloc (real_name_ - name + 2);
+      memcpy (dir_name, name, real_name_ - name + 1);
+      dir_name[real_name_ - name + 1] = '\0';
+      //printf("dir_name: %s\n", dir_name);
+      // find target directory
+          target = dir_open_root ();
+          result = dir_multi_lookup (&target, dir_name);
+      real_name_++;
+      free (dir_name);
+    }
+  if (result)
+    {
+      *real_name = real_name_;
+      return target;
+    }
+  else
+    return NULL;
+}
 /* List files in the root directory. */
 void
 fsutil_ls (char **argv UNUSED) 
@@ -36,10 +75,14 @@ fsutil_cat (char **argv)
   const char *file_name = argv[1];
   
   struct file *file;
-  char *buffer;
+  char *buffer, *real_name;
+  struct dir *dir;
 
   printf ("Printing '%s' to the console...\n", file_name);
-  file = filesys_open (file_name, NULL);
+  dir = trace_dir (file_name, &real_name);
+  file = filesys_open (real_name, dir);
+  dir_close (dir);
+
   if (file == NULL)
     PANIC ("%s: open failed", file_name);
   buffer = palloc_get_page (PAL_ASSERT);
@@ -61,10 +104,14 @@ void
 fsutil_rm (char **argv) 
 {
   const char *file_name = argv[1];
+  struct dir *dir;
+  char *real_name;
   
   printf ("Deleting '%s'...\n", file_name);
-  if (!filesys_remove (file_name, NULL))
+  dir = trace_dir (file_name, &real_name);
+  if (!filesys_remove (real_name, dir))
     PANIC ("%s: delete failed\n", file_name);
+  dir_close (dir);
 }
 
 /* Extracts a ustar-format tar archive from the scratch block
@@ -114,15 +161,19 @@ fsutil_extract (char **argv UNUSED)
       else if (type == USTAR_REGULAR)
         {
           struct file *dst;
+          struct dir *dir;
+          char *real_name;
 
           printf ("Putting '%s' into the file system...\n", file_name);
 
           /* Create destination file. */
-          if (!filesys_create (file_name, size, NULL))
+          dir = trace_dir (file_name, &real_name);
+          if (!filesys_create (real_name, size, dir))
             PANIC ("%s: create failed", file_name);
-          dst = filesys_open (file_name, NULL);
+          dst = filesys_open (real_name, dir);
           if (dst == NULL)
             PANIC ("%s: open failed", file_name);
+          dir_close (dir);
 
           /* Do copy. */
           while (size > 0)
@@ -174,6 +225,9 @@ fsutil_append (char **argv)
   struct block *dst;
   off_t size;
 
+  struct dir *dir;
+  char *real_name;
+
   printf ("Appending '%s' to ustar archive on scratch device...\n", file_name);
 
   /* Allocate buffer. */
@@ -182,7 +236,9 @@ fsutil_append (char **argv)
     PANIC ("couldn't allocate buffer");
 
   /* Open source file. */
-  src = filesys_open (file_name, NULL);
+  dir = trace_dir (file_name, &real_name);
+  src = filesys_open (real_name, dir);
+  dir_close (dir);
   if (src == NULL)
     PANIC ("%s: open failed", file_name);
   size = file_length (src);
