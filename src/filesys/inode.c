@@ -13,7 +13,7 @@
 #define INVALID_SECTOR 100000
 
 static size_t temp = 0;
-
+static struct lock eof_lock;
 
 /* On-disk inode.
    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
@@ -93,7 +93,7 @@ byte_to_sector (const struct inode *inode, off_t pos)
 
 /* Grow the length of the inode to given length. */
 static bool 
-inode_grow (struct inode_disk *disk_inode, block_sector_t sector, off_t length)
+inode_grow (struct inode_disk *disk_inode, block_sector_t sector, off_t length, bool eof)
 {
   bool success = false;
   static char zeros[BLOCK_SECTOR_SIZE];
@@ -266,6 +266,8 @@ done:
       disk_inode->length = 0;
     }
 
+  if (eof)
+    lock_release (&eof_lock);
   return success;
 }
 
@@ -280,6 +282,7 @@ inode_init (void)
 {
   list_init (&open_inodes);
   lock_init (&inode_lock);
+  lock_init (&eof_lock);
 }
 /* Initializes an inode with LENGTH bytes of data and
    writes the new inode to sector SECTOR on the file system
@@ -310,7 +313,7 @@ inode_create (block_sector_t sector, off_t length)
       for (i = 0; i < 124; i++)
         disk_inode->direct[i] = INVALID_SECTOR;
 
-      success = inode_grow (disk_inode, sector, length);
+      success = inode_grow (disk_inode, sector, length, false);
 
       if (success)
         cache_write (sector, disk_inode);
@@ -559,7 +562,8 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
 
   if (inode->data.length < offset + size)
     {
-      inode_grow (&inode->data, inode->sector, offset + size);
+      lock_acquire (&eof_lock);
+      inode_grow (&inode->data, inode->sector, offset + size, true);
       cache_write (inode->sector, &inode->data);
       //block_write (fs_device, inode->sector, &inode->data);
     }
