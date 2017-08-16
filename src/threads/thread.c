@@ -15,6 +15,7 @@
 #include "threads/fixed-point.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "vm/frame.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -114,6 +115,14 @@ thread_init (void)
   initial_thread->lock = NULL;
   list_init (&initial_thread->lock_list);
   initial_thread->tid = allocate_tid ();
+
+#ifdef USERPROG
+  list_init (&(initial_thread->child_process));
+  initial_thread->process = NULL;
+  initial_thread->parent = NULL;        // root thread has no parent
+  sema_init (&(initial_thread->exec_sema), 0);
+  sema_init (&(initial_thread->exec_sema2), 0);
+#endif
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -267,6 +276,15 @@ thread_create (const char *name, int priority,
   sf = alloc_frame (t, sizeof *sf);
   sf->eip = switch_entry;
   sf->ebp = 0;
+
+#ifdef USERPROG
+  list_init (&(t->child_process));
+  t->process = NULL;
+  t->parent = thread_current ();
+  sema_init (&(t->exec_sema), 0);
+  sema_init (&(t->exec_sema2), 0);
+  t->executable = NULL;
+#endif
 
   intr_set_level (old_level);
 
@@ -616,6 +634,7 @@ init_thread (struct thread *t, const char *name, int priority)
   }
 
   t->magic = THREAD_MAGIC;
+
   list_push_back (&all_list, &t->allelem);
 }
 

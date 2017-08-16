@@ -4,6 +4,9 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include <hash.h>
+#include "threads/synch.h"
+#include "vm/page.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -107,6 +110,13 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+    struct list child_process;          /* The list of child process. */
+    struct process *process;            /* Process information. */
+    struct thread *parent;              /* Parent thread */
+    struct semaphore exec_sema;
+    struct semaphore exec_sema2;
+    struct file *executable;
+    struct hash sup_pagedir;
 #endif
 
     /* Owned by thread.c. */

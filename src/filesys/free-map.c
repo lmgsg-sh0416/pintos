@@ -4,6 +4,8 @@
 #include "filesys/file.h"
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
+#include "threads/synch.h"
+#include "threads/malloc.h"
 
 static struct file *free_map_file;   /* Free map file. */
 static struct bitmap *free_map;      /* Free map, one bit per sector. */
@@ -54,6 +56,7 @@ void
 free_map_open (void) 
 {
   free_map_file = file_open (inode_open (FREE_MAP_SECTOR));
+
   if (free_map_file == NULL)
     PANIC ("can't open free map");
   if (!bitmap_read (free_map, free_map_file))

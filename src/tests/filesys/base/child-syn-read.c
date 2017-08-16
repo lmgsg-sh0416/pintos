@@ -31,6 +31,7 @@ main (int argc, const char *argv[])
   random_bytes (buf, sizeof buf);
 
   CHECK ((fd = open (file_name)) > 1, "open \"%s\"", file_name);
+  msg ("Open success");
   for (i = 0; i < sizeof buf; i++) 
     {
       char c;

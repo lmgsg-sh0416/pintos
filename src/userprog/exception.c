@@ -1,9 +1,12 @@
 #include "userprog/exception.h"
 #include <inttypes.h>
 #include <stdio.h>
+#include <round.h>
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "userprog/process.h"
+#include "threads/vaddr.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -71,6 +74,7 @@ exception_print_stats (void)
 static void
 kill (struct intr_frame *f) 
 {
+	struct thread *cur = thread_current ();
   /* This interrupt is one (probably) caused by a user process.
      For example, the process might have tried to access unmapped
      virtual memory (a page fault).  For now, we simply kill the
@@ -78,7 +82,9 @@ kill (struct intr_frame *f)
      the kernel.  Real Unix-like operating systems pass most
      exceptions back to the process via signals, but we don't
      implement them. */
-     
+
+  if (cur->process != NULL) 
+	  cur->process->exit_status = -1;
   /* The interrupt frame's code segment value tells us where the
      exception originated. */
   switch (f->cs)
@@ -126,6 +132,9 @@ page_fault (struct intr_frame *f)
   bool write;        /* True: access was write, false: access was read. */
   bool user;         /* True: access by user, false: access by kernel. */
   void *fault_addr;  /* Fault address. */
+  struct thread *cur = thread_current ();
+  struct hash_iterator i;
+  struct page *spte;
 
   /* Obtain faulting address, the virtual address that was
      accessed to cause the fault.  It may point to code or to
@@ -147,15 +156,47 @@ page_fault (struct intr_frame *f)
   not_present = (f->error_code & PF_P) == 0;
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
-
-  /* To implement virtual memory, delete the rest of the function
-     body, and replace it with code that brings in the page to
-     which fault_addr refers. */
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");
-  kill (f);
+  /* Implement virtual memory, if fault_addr is valid then
+     brings page which fault_addr refers. */
+  // find segment
+  hash_first (&i, &(cur->sup_pagedir));
+  while (hash_next (&i))
+    {
+      spte = hash_entry (hash_cur (&i), struct page, elem);
+      if (spte->start_vaddr <= fault_addr && fault_addr < spte->end_vaddr)
+        break;
+    }
+  // segment not found
+  if (hash_cur (&i) == NULL) 
+    {
+      cur->process->exit_status = -1;
+      thread_exit ();
+    }
+  // segment is stack and fault_addr is in red zone
+  if (spte->upage == PHYS_BASE-STACK_SIZE && fault_addr < f->esp-128) 
+    {
+      cur->process->exit_status = -1;
+      thread_exit ();
+    }
+  // segment is readonly but do write
+  if (spte->writable == false && write == true)
+    {
+      cur->process->exit_status = -1;
+      thread_exit ();
+    }
+  // load segment
+  if (!load_segment (spte, fault_addr)) 
+    {
+      /*
+  printf ("Page fault at %p: %s error %s page in %s context. %d\n",
+      fault_addr,
+      not_present ? "not present" : "rights violation",
+      write ? "writing" : "reading",
+      user ? "user" : "kernel", page_fault_cnt);
+      */
+      cur->process->exit_status = -1;
+      thread_exit ();
+    }
+  unpin_frame (cur->pagedir, fault_addr);
 }
 
